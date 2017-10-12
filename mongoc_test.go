@@ -108,6 +108,26 @@ func TestMongoc(t *testing.T) {
 		t.Errorf("count fail %v err:%v", count, err)
 		return
 	}
+	//pipe
+	//
+	res = []map[string]interface{}{}
+	err = col.Pipe([]bson.M{
+		bson.M{
+			"$match": bson.M{
+				"b": 300,
+			},
+		},
+		bson.M{
+			"$project": bson.M{
+				"_id": 1,
+				"b":   1,
+			},
+		},
+	}, &res)
+	if err != nil || len(res) != 1 {
+		t.Errorf("find fail %v err:%v->%v", len(res), err, res)
+		return
+	}
 	//execute command
 	//
 	one = map[string]interface{}{}
@@ -119,4 +139,5 @@ func TestMongoc(t *testing.T) {
 		return
 	}
 	fmt.Printf("%v\n", one)
+
 }
