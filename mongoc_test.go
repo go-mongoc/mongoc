@@ -7,6 +7,10 @@ import (
 	bson "gopkg.in/bson.v2"
 )
 
+func init() {
+	LogTraceEnable()
+}
+
 func TestMongoc(t *testing.T) {
 	pool := NewPool("mongodb://loc.m:27017", 100, 10, 2)
 	col := pool.C("test", "mongoc")
@@ -130,14 +134,69 @@ func TestMongoc(t *testing.T) {
 	}
 	//execute command
 	//
-	one = map[string]interface{}{}
-	err = pool.Execute("test", bson.M{
-		"ping": 1,
-	}, one)
+	err = pool.Ping("test")
 	if err != nil {
 		t.Error(err)
-		return
 	}
 	fmt.Printf("%v\n", one)
 
+}
+
+func TestErrCase(t *testing.T) {
+	//test uri invalid
+	func() {
+		defer func() {
+			err := recover()
+			if err == nil {
+				t.Error("not panic")
+			} else {
+				fmt.Println("test uri empty passed")
+			}
+		}()
+		pool := NewPool("", 100, 10, 2)
+		col := pool.C("test", "mongoc")
+		col.Remove(nil, false)
+	}()
+	//test host error
+	{
+		pool := NewPool("mongodb://192.168.1.1:27017", 100, 10, 2)
+		col := pool.C("test", "mongoc")
+		err := col.Remove(nil, false)
+		if err == nil {
+			t.Error("not error")
+			return
+		}
+		fmt.Println("test host err passed")
+	}
+}
+
+func TestVersion(t *testing.T) {
+	//for call well
+	fmt.Printf("%v.%v.%v\n", MajorVersion(), MinorVersion(), MicroVersion())
+	fmt.Println(Version())
+	//
+	if !CheckVersion(1, 8, 1) {
+		t.Error("error")
+		return
+	}
+	if CheckVersion(1, 9, 1) {
+		t.Error("error")
+		return
+	}
+}
+
+func TestLog(t *testing.T) {
+	//
+	//for call well
+	LogTraceEnable()
+	LogTraceDisable()
+	//
+	//for call well
+	LogHandler(LogLevelCritical, "testing", "1")
+	LogHandler(LogLevelDebug, "testing", "2")
+	LogHandler(LogLevelError, "testing", "3")
+	LogHandler(LogLevelInfo, "testing", "4")
+	LogHandler(LogLevelMessage, "testing", "5")
+	LogHandler(LogLevelTrace, "testing", "6")
+	LogHandler(LogLevelWarning, "testing", "7")
 }

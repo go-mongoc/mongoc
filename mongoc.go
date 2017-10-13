@@ -8,37 +8,86 @@ package mongoc
 #cgo darwin LDFLAGS: -L/usr/local/lib -lmongoc-1.0 -lbson-1.0
 #cgo linux CFLAGS: -I/usr/local/include/libmongoc-1.0/ -I/usr/local/include/libbson-1.0/ -Wno-deprecated-declarations
 #cgo linux LDFLAGS: -L/usr/local/lib -lmongoc-1.0 -lbson-1.0
-bool cmgo_ping(mongoc_client_t* client,char** reply, bson_error_t* error);
-bson_t* cmgo_new_bson_from_json(const char* json,bson_error_t* error);
+void mongoc_cgo_init();
 */
 import "C"
 import (
 	"fmt"
+	"log"
 	"reflect"
 	"sync"
-	"time"
 	"unsafe"
 
 	"gopkg.in/bson.v2"
 )
 
 func init() {
-	C.mongoc_init()
+	C.mongoc_cgo_init()
 }
 
+/**** log level ****/
+
+//LogLevel is the wrapper for C.mongoc_log_level_t
+type LogLevel C.mongoc_log_level_t
+
+//LogLevelError is the C.MONGOC_LOG_LEVEL_ERROR, log error level
+var LogLevelError = LogLevel(C.MONGOC_LOG_LEVEL_ERROR)
+
+//LogLevelCritical is the C.MONGOC_LOG_LEVEL_CRITICAL, log critical level
+var LogLevelCritical = LogLevel(C.MONGOC_LOG_LEVEL_CRITICAL)
+
+//LogLevelWarning is the C.MONGOC_LOG_LEVEL_WARNING, log warning level
+var LogLevelWarning = LogLevel(C.MONGOC_LOG_LEVEL_WARNING)
+
+//LogLevelMessage is the C.MONGOC_LOG_LEVEL_MESSAGE, log message level
+var LogLevelMessage = LogLevel(C.MONGOC_LOG_LEVEL_MESSAGE)
+
+//LogLevelInfo is the C.MONGOC_LOG_LEVEL_INFO, log info level
+var LogLevelInfo = LogLevel(C.MONGOC_LOG_LEVEL_INFO)
+
+//LogLevelDebug is the C.MONGOC_LOG_LEVEL_DEBUG, log debug level
+var LogLevelDebug = LogLevel(C.MONGOC_LOG_LEVEL_DEBUG)
+
+//LogLevelTrace is the C.MONGOC_LOG_LEVEL_TRACE, log trace level
+var LogLevelTrace = LogLevel(C.MONGOC_LOG_LEVEL_TRACE)
+
+/**** query flags ****/
+
+//QueryFlags is the wrapper for C.mongoc_query_flags_t
+//for more: http://mongoc.org/libmongoc/current/mongoc_query_flags_t.html
 type QueryFlags C.mongoc_query_flags_t
 
-//
+//QueryNone is the C.MONGOC_QUERY_NONE
+//for more: http://mongoc.org/libmongoc/current/mongoc_query_flags_t.html
 var QueryNone = QueryFlags(C.MONGOC_QUERY_NONE)
-var QueryTailableCursor = QueryFlags(C.MONGOC_QUERY_TAILABLE_CURSOR)
-var QuerySlaveOk = QueryFlags(C.MONGOC_QUERY_SLAVE_OK)
-var QueryOplogReplay = QueryFlags(C.MONGOC_QUERY_OPLOG_REPLAY)
-var QueryNoCursorTimeout = QueryFlags(C.MONGOC_QUERY_NO_CURSOR_TIMEOUT)
-var QueryAwaitData = QueryFlags(C.MONGOC_QUERY_AWAIT_DATA)
-var QueryExhaust = QueryFlags(C.MONGOC_QUERY_EXHAUST)
-var QueryPartial = QueryFlags(C.MONGOC_QUERY_PARTIAL)
 
-//
+//QueryTailableCursor is the C.MONGOC_QUERY_TAILABLE_CURSOR
+//for more: http://mongoc.org/libmongoc/current/mongoc_query_flags_t.html
+var QueryTailableCursor = QueryFlags(C.MONGOC_QUERY_TAILABLE_CURSOR)
+
+//QuerySlaveOk is the C.MONGOC_QUERY_SLAVE_OK
+//for more: http://mongoc.org/libmongoc/current/mongoc_query_flags_t.html
+var QuerySlaveOk = QueryFlags(C.MONGOC_QUERY_SLAVE_OK)
+
+//QueryOplogReplay is the C.MONGOC_QUERY_OPLOG_REPLAY
+//for more: http://mongoc.org/libmongoc/current/mongoc_query_flags_t.html
+var QueryOplogReplay = QueryFlags(C.MONGOC_QUERY_OPLOG_REPLAY)
+
+//QueryNoCursorTimeout is the C.MONGOC_QUERY_NO_CURSOR_TIMEOUT
+//for more: http://mongoc.org/libmongoc/current/mongoc_query_flags_t.html
+var QueryNoCursorTimeout = QueryFlags(C.MONGOC_QUERY_NO_CURSOR_TIMEOUT)
+
+//QueryAwaitData is the C.MONGOC_QUERY_AWAIT_DATA
+//for more: http://mongoc.org/libmongoc/current/mongoc_query_flags_t.html
+var QueryAwaitData = QueryFlags(C.MONGOC_QUERY_AWAIT_DATA)
+
+//QueryExhaust is the C.MONGOC_QUERY_EXHAUST
+//for more: http://mongoc.org/libmongoc/current/mongoc_query_flags_t.html
+var QueryExhaust = QueryFlags(C.MONGOC_QUERY_EXHAUST)
+
+//QueryPartial is the C.MONGOC_QUERY_PARTIAL
+//for more: http://mongoc.org/libmongoc/current/mongoc_query_flags_t.html
+var QueryPartial = QueryFlags(C.MONGOC_QUERY_PARTIAL)
 
 /**** version ****/
 
@@ -69,9 +118,50 @@ func MinorVersion() int {
 	return int(C.mongoc_get_minor_version())
 }
 
-/**** bson error ****/
+/**** log ****/
+
+//export logHandler
+func logHandler(logLevel C.mongoc_log_level_t, logDomain *C.char, message *C.char, userData *unsafe.Pointer) {
+	LogHandler(LogLevel(logLevel), C.GoString(logDomain), C.GoString(message))
+}
+
+//LogHandler is customable callback func to handler the mongoc log.
+//default is log.Printf("[level] domain:message")
+var LogHandler = func(logLevel LogLevel, logDomain, message string) {
+	switch logLevel {
+	case LogLevelError:
+		log.Printf("[E] %v:%v", logDomain, message)
+	case LogLevelCritical:
+		log.Printf("[C] %v:%v", logDomain, message)
+	case LogLevelWarning:
+		log.Printf("[W] %v:%v", logDomain, message)
+	case LogLevelMessage:
+		log.Printf("[M] %v:%v", logDomain, message)
+	case LogLevelInfo:
+		log.Printf("[I] %v:%v", logDomain, message)
+	case LogLevelDebug:
+		log.Printf("[D] %v:%v", logDomain, message)
+	case LogLevelTrace:
+		log.Printf("[T] %v:%v", logDomain, message)
+	default:
+		log.Printf("[U] %v:%v", logDomain, message)
+	}
+}
+
+//LogTraceEnable will enable trace log
+//for more http://mongoc.org/libmongoc/current/logging.html
+func LogTraceEnable() {
+	C.mongoc_log_trace_enable()
+}
+
+//LogTraceDisable will disable trace log
+//for more http://mongoc.org/libmongoc/current/logging.html
+func LogTraceDisable() {
+	C.mongoc_log_trace_disable()
+}
 
 //BSONError is the wrapper of bson_error_t.
+//for more http://mongoc.org/libmongoc/current/errors.html
 type BSONError struct {
 	Domain  uint32
 	Code    uint32
@@ -197,10 +287,8 @@ func (p *Pool) Pop() *Client {
 		case <-p.max:
 			client, err := NewClient(p.URI)
 			if err != nil {
-				fmt.Printf("pop fail with:%v, will retry after 3s\n", err)
-				time.Sleep(3 * time.Second)
-				p.max <- 1 //push back to the max chan.
-				break
+				log.Printf("panic: pool new clien fail with %v", err)
+				panic(err)
 			}
 			client.Pool = p
 			return client
@@ -222,15 +310,25 @@ func (p *Pool) C(dbname, colname string) *Collection {
 }
 
 //Execute one command.
-func (p *Pool) Execute(dbname string, cmds, v interface{}) (err error) {
+func (p *Pool) Execute(dbname string, cmds, opts, v interface{}) (err error) {
 	client := p.Pop()
 	defer client.Close()
-	return client.Execute(dbname, cmds, v)
+	return client.Execute(dbname, cmds, opts, v)
+}
+
+//Ping to database.
+func (p *Pool) Ping(dbname string) (err error) {
+	reply := map[string]interface{}{}
+	err = p.Execute(dbname, bson.M{
+		"ping": 1,
+	}, nil, &reply)
+	return
 }
 
 /**** client ****/
 
 //Client is the wrapper of C.mongoc_client_t.
+//Warning: close needed after used.
 type Client struct {
 	URI    string
 	Pool   *Pool
@@ -255,37 +353,6 @@ func NewClient(uri string) (client *Client, err error) {
 	}
 	return
 }
-
-// func (c *Client) DB(dbname string) *Database {
-// 	cdbname := C.CString(dbname)
-// 	defer C.free(unsafe.Pointer(cdbname))
-// 	return &Database{
-// 		Name: dbname,
-// 		db:   C.mongoc_client_get_database(c.client, cdbname),
-// 	}
-// }
-
-// func (c *Client) Collection(dbname, colname string) *Collection {
-// 	col := &Collection{
-// 		Name:   colname,
-// 		DbName: dbname,
-// 		Pool
-// 	}
-// 	// c.cols[key] = col
-// 	return col
-// }
-
-// func (c *Client) Ping() (reply string, err error) {
-// var berr C.bson_error_t
-// var creply *C.char
-// if bool(C.cmgo_ping(c.client, &creply, &berr)) {
-// 	reply = C.GoString(creply)
-// 	C.bson_free(unsafe.Pointer(creply))
-// } else {
-// 	err = newBsonError(&berr)
-// }
-// return
-// }
 
 //Close will following
 //
@@ -330,26 +397,31 @@ func (c *Client) rawCollection(dbname, colname string) *rawCollection {
 }
 
 //Execute one command
-func (c *Client) Execute(dbname string, cmds, v interface{}) (err error) {
-	var rawCmds *C.bson_t
-	rawCmds, err = parseBSON(cmds)
+func (c *Client) Execute(dbname string, cmds, opts, v interface{}) (err error) {
+	rawCmds, err := parseBSON(cmds)
+	if err != nil {
+		return
+	}
+	if opts == nil {
+		opts = map[string]interface{}{}
+	}
+	rawOpts, err := parseBSON(opts)
 	if err != nil {
 		return
 	}
 	cdbname := C.CString(dbname)
-	var db = C.mongoc_client_get_database(c.raw, cdbname)
 	var berr C.bson_error_t
 	var doc C.bson_t
-	if C.mongoc_database_write_command_with_opts(db, rawCmds, nil, &doc, &berr) {
+	if C.mongoc_client_read_write_command_with_opts(c.raw, cdbname, rawCmds, nil, rawOpts, &doc, &berr) {
 		var str = C.bson_get_data(&doc)
 		mbys := C.GoBytes(unsafe.Pointer(str), C.int(doc.len))
 		err = bson.Unmarshal(mbys, v)
-		C.bson_destroy(&doc)
 	} else {
 		err = parseBSONError(&berr)
 	}
-	C.mongoc_database_destroy(db)
+	C.bson_destroy(&doc)
 	C.free(unsafe.Pointer(cdbname))
+	C.bson_destroy(rawOpts)
 	C.bson_destroy(rawCmds)
 	return
 }
@@ -520,16 +592,15 @@ func (c *Collection) FindAndModifyWithFlags(query, sort, update, fields interfac
 	}
 	var berr C.bson_error_t
 	var doc C.bson_t
-	if !C.mongoc_collection_find_and_modify(col.raw,
-		rawQuery, rawSort, rawUpdate, rawFields,
-		C.bool(remove), C.bool(upsert), C.bool(retnew),
-		&doc, &berr) {
+	if C.mongoc_collection_find_and_modify(col.raw, rawQuery, rawSort, rawUpdate, rawFields,
+		C.bool(remove), C.bool(upsert), C.bool(retnew), &doc, &berr) {
+		var str = C.bson_get_data(&doc)
+		mbys := C.GoBytes(unsafe.Pointer(str), C.int(doc.len))
+		err = bson.Unmarshal(mbys, v)
+	} else {
 		err = parseBSONError(&berr)
-		return
 	}
-	var str = C.bson_get_data(&doc)
-	mbys := C.GoBytes(unsafe.Pointer(str), C.int(doc.len))
-	err = bson.Unmarshal(mbys, v)
+	C.bson_destroy(&doc)
 	return
 }
 
@@ -593,8 +664,8 @@ func (c *Collection) FindWithFlags(flags QueryFlags, query, fields interface{}, 
 	}
 	var cursor = C.mongoc_collection_find(col.raw, C.mongoc_query_flags_t(flags),
 		C.uint32_t(skip), C.uint32_t(limit), C.uint32_t(batchSize), rawQuery, rawFields, nil)
-	defer C.mongoc_cursor_destroy(cursor)
 	err = c.parseCursor(cursor, val)
+	C.mongoc_cursor_destroy(cursor)
 	return
 }
 
@@ -630,8 +701,8 @@ func (c *Collection) PipeWithFlags(flags QueryFlags, pipeline, opts interface{},
 		}
 	}
 	var cursor = C.mongoc_collection_aggregate(col.raw, C.mongoc_query_flags_t(flags), rawPipeline, rawOpts, nil)
-	defer C.mongoc_cursor_destroy(cursor)
 	err = c.parseCursor(cursor, val)
+	C.mongoc_cursor_destroy(cursor)
 	return
 }
 
