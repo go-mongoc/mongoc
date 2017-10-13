@@ -1,5 +1,9 @@
 // Package mongoc is the go binding for libmongoc
 //
+// It was created as simple use api and the libmongoc is not used instead of golang high performance pool
+// all api is wrapped by basic, not all, but enough。
+// if having some api is needed but not wrapped, send case to https://github.com/go-mongoc/mongoc/issues
+// the bulk is on plan.
 package mongoc
 
 /*
@@ -16,6 +20,7 @@ import (
 	"log"
 	"reflect"
 	"sync"
+	"time"
 	"unsafe"
 
 	"gopkg.in/bson.v2"
@@ -183,6 +188,11 @@ func (b *BSONError) Error() string {
 	return fmt.Sprintf("BSONError(domain:%v,code:%v,message:%v)", b.Domain, b.Code, b.Message)
 }
 
+//IsServerSelectFail check the error if is server select fail.
+func (b *BSONError) IsServerSelectFail() bool {
+	return b.Code == C.MONGOC_ERROR_SERVER_SELECTION_FAILURE
+}
+
 /**** bson ****/
 
 //BSON is the wrapper of C.bson_t
@@ -244,16 +254,25 @@ func marshalRawBSON(val interface{}) (bval *C.bson_t, err error) {
 
 /**** pool ****/
 
+//Poolable is interface for pool
+type Poolable interface {
+	Pop() *Client
+	Push(client *Client)
+}
+
 //Pool is the pool of client
 type Pool struct {
 	URI  string //the client uri.
 	pool chan *Client
+	ping chan *Client
 	max  chan int
 	//
 	ErrVer  int
 	maxSize uint32
 	minSize uint32
 	closed  bool
+	//
+	Timeout time.Duration
 }
 
 //NewPool will create the pool by size.
@@ -263,11 +282,13 @@ func NewPool(uri string, maxSize, minSize uint32) (pool *Pool) {
 	}
 	pool = &Pool{
 		pool:    make(chan *Client, maxSize),
+		ping:    make(chan *Client, maxSize),
 		max:     make(chan int, maxSize),
 		ErrVer:  2,
 		maxSize: maxSize,
 		minSize: minSize,
 		URI:     uri,
+		Timeout: 600 * time.Second,
 	}
 	for i := uint32(0); i < maxSize; i++ {
 		pool.max <- 1
@@ -284,10 +305,33 @@ func (p *Pool) Pop() *Client {
 	if p.closed {
 		panic("pool is closed")
 	}
+	var tempDelay = 5 * time.Millisecond // how long to sleep on accept failure
 	for {
 		select {
 		case found := <-p.pool:
 			return found
+		case ping := <-p.ping:
+			err := ping.Ping("test")
+			if err == nil {
+				return ping
+			}
+			//check if error is server select fail.
+			//if select fail push back to ping pool and wait for retry
+			//if other fail close it and push back to max pool for create new one.
+			if berr, ok := err.(*BSONError); ok && berr.IsServerSelectFail() {
+				tempDelay *= 2
+				if tempDelay > p.Timeout {
+					panic("pool timeout")
+				}
+				log.Printf("waring: pool ping to server fail with %v, will retry after %v", err, tempDelay)
+				time.Sleep(tempDelay)
+				ping.LastError = nil
+				p.ping <- ping //push back to ping pool for retry
+			} else {
+				log.Printf("warning: one client is closed by error:%v", err)
+				ping.Release()
+				p.max <- 1 //push back to max pool, will create new client.
+			}
 		case <-p.max:
 			client, err := newClient(p.URI)
 			if err != nil {
@@ -296,7 +340,18 @@ func (p *Pool) Pop() *Client {
 			}
 			client.Pool = p
 			client.SetErrVer(p.ErrVer)
-			return client
+			err = client.Ping("test")
+			if err == nil {
+				return client
+			}
+			client.Release()
+			tempDelay *= 2
+			if tempDelay > p.Timeout {
+				panic("pool timeout")
+			}
+			log.Printf("warning: new client fail with ping error:%v, will retry after %v", err, tempDelay)
+			time.Sleep(tempDelay)
+			p.max <- 1 //push back to max pool for retry
 		}
 	}
 }
@@ -309,9 +364,25 @@ func (p *Pool) Push(client *Client) {
 	if client == nil {
 		panic("the client is nil")
 	}
-	p.pool <- client
+	if client.LastError == nil { //client is used well
+		p.pool <- client
+		return
+	}
+	//check if last error is server select fail.
+	//if select fail push back to ping pool and wait for retry
+	//if other fail close it and push back to max pool for create new one.
+	if berr, ok := client.LastError.(*BSONError); ok && berr.IsServerSelectFail() {
+		log.Printf("warning: one client having server select fail, push to ping pool:%v", berr)
+		client.LastError = nil
+		p.ping <- client //push back to ping pool for retry
+	} else {
+		log.Printf("warning: one client is closed by error:%v", berr)
+		client.Release()
+		p.max <- 1 //push back to max pool for create new one
+	}
 }
 
+//C will create collection by database name and collection name.
 func (p *Pool) C(dbname, colname string) *Collection {
 	if p.closed {
 		panic("pool is closed")
@@ -330,20 +401,11 @@ func (p *Pool) Execute(dbname string, cmds, opts, v interface{}) (err error) {
 	return client.Execute(dbname, cmds, opts, v)
 }
 
-//Ping to database.
-func (p *Pool) Ping(dbname string) (err error) {
-	reply := map[string]interface{}{}
-	err = p.Execute(dbname, bson.M{
-		"ping": 1,
-	}, nil, &reply)
-	return
-}
-
 //Close the pool
 func (p *Pool) Close() {
 	p.closed = true
 	having := true
-	for having {
+	for having { //close all client
 		select {
 		case found := <-p.pool:
 			found.Pool = nil
@@ -356,16 +418,26 @@ func (p *Pool) Close() {
 	close(p.max)
 }
 
+//Ping to database.
+func (p *Pool) Ping(dbname string) (err error) {
+	reply := map[string]interface{}{}
+	err = p.Execute(dbname, bson.M{
+		"ping": 1,
+	}, nil, &reply)
+	return
+}
+
 /**** client ****/
 
 //Client is the wrapper of C.mongoc_client_t.
 //Warning: close needed after used.
 type Client struct {
-	URI    string
-	Pool   *Pool
-	raw    *C.mongoc_client_t
-	cols   map[string]*rawCollection
-	colLck sync.RWMutex
+	URI       string
+	Pool      Poolable
+	raw       *C.mongoc_client_t
+	cols      map[string]*rawCollection
+	colLck    sync.RWMutex
+	LastError error
 }
 
 //newClient will create client by C.mongoc_client_new.
@@ -404,13 +476,15 @@ func (c *Client) Release() {
 		C.mongoc_client_destroy(c.raw)
 	}
 	c.colLck.Lock()
-	for _, col := range c.cols {
+	for _, col := range c.cols { //free all collection.
 		col.Release()
 	}
 	c.cols = map[string]*rawCollection{}
 	c.colLck.Unlock()
 }
 
+//create the raw collection by dbname/colname.
+//it will try get one from the cache list, if found use cache, or create new one.
 func (c *Client) rawCollection(dbname, colname string) *rawCollection {
 	if c.raw == nil {
 		panic("raw client is nil")
@@ -458,11 +532,21 @@ func (c *Client) Execute(dbname string, cmds, opts, v interface{}) (err error) {
 		err = bson.Unmarshal(mbys, v)
 	} else {
 		err = parseBSONError(&berr)
+		c.LastError = err
 	}
 	C.bson_destroy(&doc)
 	C.free(unsafe.Pointer(cdbname))
 	C.bson_destroy(rawOpts)
 	C.bson_destroy(rawCmds)
+	return
+}
+
+//Ping to database.
+func (c *Client) Ping(dbname string) (err error) {
+	reply := map[string]interface{}{}
+	err = c.Execute(dbname, bson.M{
+		"ping": 1,
+	}, nil, &reply)
 	return
 }
 
@@ -489,7 +573,7 @@ func (r *rawCollection) Release() {
 type Collection struct {
 	Name   string
 	DbName string
-	Pool   *Pool
+	Pool   Poolable
 }
 
 //Insert many document to database.
@@ -517,6 +601,7 @@ func (c *Collection) Insert(docs ...interface{}) (err error) {
 	if !C.mongoc_collection_insert_bulk(col.raw, C.MONGOC_INSERT_NONE, (**C.bson_t)(&bdocs[0]), C.uint32_t(len(bdocs)), nil, &berr) {
 		// if !C.mongoc_collection_insert(col, C.MONGOC_INSERT_NONE, bdocs[0], nil, &berr) {
 		err = parseBSONError(&berr)
+		client.LastError = err
 	}
 	return
 }
@@ -556,6 +641,7 @@ func (c *Collection) Update(selector, update interface{}, upsert, many bool) (er
 	var berr C.bson_error_t
 	if !C.mongoc_collection_update(col.raw, C.mongoc_update_flags_t(flags), rawSelector, rawUpdate, nil, &berr) {
 		err = parseBSONError(&berr)
+		client.LastError = err
 	}
 	return
 }
@@ -590,6 +676,7 @@ func (c *Collection) Remove(selector interface{}, single bool) (err error) {
 	var berr C.bson_error_t
 	if !C.mongoc_collection_remove(col.raw, C.mongoc_remove_flags_t(flags), rawSelector, nil, &berr) {
 		err = parseBSONError(&berr)
+		client.LastError = err
 	}
 	return
 }
@@ -647,6 +734,7 @@ func (c *Collection) FindAndModifyWithFlags(query, update, fields interface{}, r
 		err = bson.Unmarshal(mbys, v)
 	} else {
 		err = parseBSONError(&berr)
+		client.LastError = err
 	}
 	C.bson_destroy(&doc)
 	return
@@ -658,7 +746,7 @@ func (c *Collection) FindAndModify(query, update, fields interface{}, upsert, re
 }
 
 //parse cursor to value.
-func (c *Collection) parseCursor(cursor *C.mongoc_cursor_t, val interface{}) (err error) {
+func (c *Collection) parseCursor(client *Client, cursor *C.mongoc_cursor_t, val interface{}) (err error) {
 	var doc *C.bson_t
 	targetVal := reflect.Indirect(reflect.ValueOf(val))
 	elemType := targetVal.Type().Elem()
@@ -679,17 +767,18 @@ func (c *Collection) parseCursor(cursor *C.mongoc_cursor_t, val interface{}) (er
 	var berr C.bson_error_t
 	if C.mongoc_cursor_error(cursor, &berr) {
 		err = parseBSONError(&berr)
+		client.LastError = err
 	}
 	return
 }
 
 //FindWithFlags the document by flags.
 func (c *Collection) FindWithFlags(flags QueryFlags, query, fields interface{}, skip, limit, batchSize int, val interface{}) (err error) {
-	var client = c.Pool.Pop()
+	var client = c.Pool.Pop() //apply client
 	var col = client.rawCollection(c.DbName, c.Name)
 	var rawQuery, rawFields *C.bson_t
 	defer func() {
-		client.Close()
+		client.Close() //push back clien to pool
 		if rawQuery != nil {
 			C.bson_destroy(rawQuery)
 		}
@@ -714,7 +803,7 @@ func (c *Collection) FindWithFlags(flags QueryFlags, query, fields interface{}, 
 	{ //execute cursor
 		var cursor = C.mongoc_collection_find(col.raw, C.mongoc_query_flags_t(flags),
 			C.uint32_t(skip), C.uint32_t(limit), C.uint32_t(batchSize), rawQuery, rawFields, nil)
-		err = c.parseCursor(cursor, val)
+		err = c.parseCursor(client, cursor, val)
 		C.mongoc_cursor_destroy(cursor)
 	}
 	return
@@ -731,7 +820,7 @@ func (c *Collection) PipeWithFlags(flags QueryFlags, pipeline, opts interface{},
 	var col = client.rawCollection(c.DbName, c.Name)
 	var rawPipeline, rawOpts *C.bson_t
 	defer func() {
-		client.Close()
+		client.Close() //push back clien to pool
 		if rawPipeline != nil {
 			C.bson_destroy(rawPipeline)
 		}
@@ -752,7 +841,7 @@ func (c *Collection) PipeWithFlags(flags QueryFlags, pipeline, opts interface{},
 	}
 	{ //execute cursor
 		var cursor = C.mongoc_collection_aggregate(col.raw, C.mongoc_query_flags_t(flags), rawPipeline, rawOpts, nil)
-		err = c.parseCursor(cursor, val)
+		err = c.parseCursor(client, cursor, val)
 		C.mongoc_cursor_destroy(cursor)
 	}
 	return
@@ -769,7 +858,7 @@ func (c *Collection) CountWithFlags(flags QueryFlags, query interface{}, skip, l
 	var col = client.rawCollection(c.DbName, c.Name)
 	var rawQuery *C.bson_t
 	defer func() {
-		client.Close()
+		client.Close() //push back clien to pool
 		if rawQuery != nil {
 			C.bson_destroy(rawQuery)
 		}
@@ -786,6 +875,7 @@ func (c *Collection) CountWithFlags(flags QueryFlags, query interface{}, skip, l
 		C.mongoc_query_flags_t(flags), rawQuery, C.int64_t(skip), C.int64_t(limit), nil, &berr))
 	if count < 0 {
 		err = parseBSONError(&berr)
+		client.LastError = err
 	}
 	return
 }
@@ -802,8 +892,9 @@ func (c *Collection) Drop() (err error) {
 	var berr C.bson_error_t
 	if !C.mongoc_collection_drop(col.raw, &berr) {
 		err = parseBSONError(&berr)
+		client.LastError = err
 	}
-	client.Close()
+	client.Close() //push back clien to pool
 	return
 }
 
@@ -854,10 +945,11 @@ func (c *Collection) Rename(dbName, newName string, dropTargeBeforeRename bool) 
 	cNewName := C.CString(newName)
 	if !C.mongoc_collection_rename(col.raw, cDbName, cNewName, C.bool(dropTargeBeforeRename), &berr) {
 		err = parseBSONError(&berr)
+		client.LastError = err
 	}
 	C.free(unsafe.Pointer(cDbName))
 	C.free(unsafe.Pointer(cNewName))
-	client.Close()
+	client.Close() //push back clien to pool
 	return
 }
 
@@ -867,7 +959,7 @@ func (c *Collection) Stats(options, v interface{}) (err error) {
 	var col = client.rawCollection(c.DbName, c.Name)
 	var rawOptions *C.bson_t
 	defer func() {
-		client.Close()
+		client.Close() //push back clien to pool
 		if rawOptions != nil {
 			C.bson_destroy(rawOptions)
 		}
@@ -887,6 +979,7 @@ func (c *Collection) Stats(options, v interface{}) (err error) {
 		err = bson.Unmarshal(mbys, v)
 	} else {
 		err = parseBSONError(&berr)
+		client.LastError = err
 	}
 	C.bson_destroy(&doc)
 	return

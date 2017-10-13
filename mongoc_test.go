@@ -215,17 +215,6 @@ func TestErrCase(t *testing.T) {
 		}()
 		NewPool("", 0, 10)
 	}()
-	//test host error
-	{
-		pool := NewPool("mongodb://192.168.1.1:27017", 100, 10)
-		col := pool.C("test", "mongoc")
-		err := col.Remove(nil, false)
-		if err == nil {
-			t.Error("not error")
-			return
-		}
-		fmt.Println("test host err passed")
-	}
 	//test closed error
 	{
 		pool := NewPool("mongodb://loc.m:27017", 100, 10)
@@ -298,71 +287,9 @@ func TestErrCase(t *testing.T) {
 			client.SetErrVer(2)
 		}()
 	}
-	//test server error
-	{
-		pool := NewPool("mongodb://127.0.0.1:17017", 100, 10)
-		col := pool.C("test", "mongoc")
-		err := col.Insert(map[string]interface{}{
-			"a": 100,
-			"b": 3,
-		})
-		if err == nil {
-			t.Error("not error")
-			return
-		}
-		fmt.Println(err)
-		//
-		one := map[string]interface{}{}
-		err = col.Stats(nil, &one)
-		if err == nil {
-			t.Error("not error")
-			return
-		}
-		res := []map[string]interface{}{}
-		err = col.Find(nil, nil, 0, 0, &res)
-		if err == nil {
-			t.Error("not error")
-			return
-		}
-		//
-		_, err = col.Count(nil, 0, 0)
-		if err == nil {
-			t.Error("not error")
-			return
-		}
-		//
-		err = col.Update(nil, bson.M{"c": 100}, true, true)
-		if err == nil {
-			t.Error("not error")
-			return
-		}
-		//
-		err = col.FindAndModify(nil, bson.M{"c": 100}, nil, true, true, nil)
-		if err == nil {
-			t.Error("not error")
-			return
-		}
-		//
-		err = pool.Ping("test")
-		if err == nil {
-			t.Error("not error")
-			return
-		}
-		err = col.Rename("test", "nmongoc", false)
-		if err == nil {
-			t.Error("not error")
-			return
-		}
-		//
-		err = col.Drop()
-		if err == nil {
-			t.Error("not error")
-			return
-		}
-	}
 	//test parse bson error
 	{
-		pool := NewPool("mongodb://127.0.0.1:17017", 100, 10)
+		pool := NewPool("mongodb://loc.m:27017", 100, 10)
 		col := pool.C("test", "mongoc")
 		err := col.Remove(TestErrCase, false)
 		if err == nil {
@@ -483,8 +410,99 @@ func TestErrCase(t *testing.T) {
 	// }
 }
 
-type errorItem struct {
-	XX int `bson:"xx"`
+type serverErrPool struct {
+	client *Client
+}
+
+func (s *serverErrPool) Pop() *Client {
+	return s.client
+}
+
+func (s *serverErrPool) Push(client *Client) {
+
+}
+func TestServerErrCase(t *testing.T) {
+	//test server error
+	{
+		var err error
+		pool := &serverErrPool{}
+		pool.client, err = newClient("mongodb://127.0.0.1:17017")
+		if err != nil {
+			t.Error("err")
+			return
+		}
+		pool.client.SetErrVer(2)
+		pool.client.Pool = pool
+		//
+		col := &Collection{
+			DbName: "test",
+			Name:   "mongoc",
+			Pool:   pool,
+		}
+		err = col.Insert(map[string]interface{}{
+			"a": 100,
+			"b": 3,
+		})
+		if err == nil {
+			t.Error("not error")
+			return
+		}
+		fmt.Println(err)
+		//
+		one := map[string]interface{}{}
+		err = col.Stats(nil, &one)
+		if err == nil {
+			t.Error("not error")
+			return
+		}
+		res := []map[string]interface{}{}
+		err = col.Find(nil, nil, 0, 0, &res)
+		if err == nil {
+			t.Error("not error")
+			return
+		}
+		//
+		_, err = col.Count(nil, 0, 0)
+		if err == nil {
+			t.Error("not error")
+			return
+		}
+		//
+		err = col.Update(nil, bson.M{"c": 100}, true, true)
+		if err == nil {
+			t.Error("not error")
+			return
+		}
+		//
+		err = col.FindAndModify(nil, bson.M{"c": 100}, nil, true, true, nil)
+		if err == nil {
+			t.Error("not error")
+			return
+		}
+		//
+		err = pool.client.Ping("test")
+		if err == nil {
+			t.Error("not error")
+			return
+		}
+		err = col.Rename("test", "nmongoc", false)
+		if err == nil {
+			t.Error("not error")
+			return
+		}
+		//
+		err = col.Remove(nil, false)
+		if err == nil {
+			t.Error("not error")
+			return
+		}
+		//
+		err = col.Drop()
+		if err == nil {
+			t.Error("not error")
+			return
+		}
+	}
 }
 
 func TestVersion(t *testing.T) {
