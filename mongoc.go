@@ -1,8 +1,9 @@
 // Package mongoc is the go binding for libmongoc
 //
-// It was created as simple use api and the libmongoc is not used instead of golang high performance pool
-// all api is wrapped by basic, not all, but enough。
-// if having some api is needed but not wrapped, send case to https://github.com/go-mongoc/mongoc/issues
+// it was created as simple use api and the libmongoc is not used instead of golang high performance pool.
+// all api is wrapped by basic, not all, but enough.
+// if having some api is needed but not wrapped, send case to https://github.com/go-mongoc/mongoc/issues.
+//
 // the bulk is on plan.
 package mongoc
 
@@ -132,7 +133,10 @@ func logHandler(logLevel C.mongoc_log_level_t, logDomain *C.char, message *C.cha
 
 //LogHandler is customable callback func to handler the mongoc log.
 //default is log.Printf("[level] domain:message")
-var LogHandler = func(logLevel LogLevel, logDomain, message string) {
+var LogHandler = DefaultLogHandler
+
+//DefaultLogHandler default mongoc log handler. impl by log.Printf("[level] domain:message")
+func DefaultLogHandler(logLevel LogLevel, logDomain, message string) {
 	switch logLevel {
 	case LogLevelError:
 		log.Printf("[E] %v:%v", logDomain, message)
@@ -368,18 +372,9 @@ func (p *Pool) Push(client *Client) {
 		p.pool <- client
 		return
 	}
-	//check if last error is server select fail.
-	//if select fail push back to ping pool and wait for retry
-	//if other fail close it and push back to max pool for create new one.
-	if berr, ok := client.LastError.(*BSONError); ok && berr.IsServerSelectFail() {
-		log.Printf("warning: one client having server select fail, push to ping pool:%v", berr)
-		client.LastError = nil
-		p.ping <- client //push back to ping pool for retry
-	} else {
-		log.Printf("warning: one client is closed by error:%v", berr)
-		client.Release()
-		p.max <- 1 //push back to max pool for create new one
-	}
+	log.Printf("warning: one client will push to ping pool with error:%v", client.LastError)
+	client.LastError = nil
+	p.ping <- client //push back to ping pool for retry
 }
 
 //C will create collection by database name and collection name.
@@ -459,9 +454,8 @@ func newClient(uri string) (client *Client, err error) {
 
 //Close will following
 //
-//	if c.Pool is nil, call Relase to destory raw client
-//
-//	if c.Pool is not nil, push client to pool
+//if c.Pool is nil, call Relase to destory raw client,
+//if c.Pool is not nil, push client to pool
 func (c *Client) Close() {
 	if c.Pool == nil {
 		c.Release()
@@ -681,8 +675,21 @@ func (c *Collection) Remove(selector interface{}, single bool) (err error) {
 	return
 }
 
+//Changed is the findAndModify reply info.
+type Changed struct {
+	Upserted interface{} `bson:"upserted"`        //the upsert id
+	Matched  bool        `bson:"updatedExisting"` //whether mathced doc updated
+	Updated  int         `bson:"n"`               //row updated.
+}
+
+type findAndModifyReply struct {
+	Changed *Changed    `bson:"lastErrorObject"`
+	Value   interface{} `bson:"value"`
+	Ok      int         `bson:"ok"`
+}
+
 //FindAndModifyWithFlags will find and modify document on database.
-func (c *Collection) FindAndModifyWithFlags(query, update, fields interface{}, remove, upsert, retnew bool, v interface{}) (err error) {
+func (c *Collection) FindAndModifyWithFlags(query, update, fields interface{}, remove, upsert, retnew bool, v interface{}) (chnaged *Changed, err error) {
 	var client = c.Pool.Pop()
 	var col = client.rawCollection(c.DbName, c.Name)
 	var rawQuery, rawSort, rawUpdate, rawFields *C.bson_t
@@ -725,13 +732,22 @@ func (c *Collection) FindAndModifyWithFlags(query, update, fields interface{}, r
 	if err != nil {
 		return
 	}
+	chnaged = &Changed{}
 	var berr C.bson_error_t
 	var doc C.bson_t
 	if C.mongoc_collection_find_and_modify(col.raw, rawQuery, rawSort, rawUpdate, rawFields,
 		C.bool(remove), C.bool(upsert), C.bool(retnew), &doc, &berr) {
 		var str = C.bson_get_data(&doc)
 		mbys := C.GoBytes(unsafe.Pointer(str), C.int(doc.len))
-		err = bson.Unmarshal(mbys, v)
+		reply := &findAndModifyReply{}
+		err = bson.Unmarshal(mbys, reply)
+		if err == nil {
+			chnaged = reply.Changed
+			if reply.Value != nil && v != nil {
+				subBys, _ := bson.Marshal(reply.Value)
+				err = bson.Unmarshal(subBys, v)
+			}
+		}
 	} else {
 		err = parseBSONError(&berr)
 		client.LastError = err
@@ -741,8 +757,13 @@ func (c *Collection) FindAndModifyWithFlags(query, update, fields interface{}, r
 }
 
 //FindAndModify document on database.
-func (c *Collection) FindAndModify(query, update, fields interface{}, upsert, retnew bool, v interface{}) (err error) {
+func (c *Collection) FindAndModify(query, update, fields interface{}, upsert, retnew bool, v interface{}) (chnaged *Changed, err error) {
 	return c.FindAndModifyWithFlags(query, update, fields, false, upsert, retnew, v)
+}
+
+//Upsert will update or insert document to database.
+func (c *Collection) Upsert(query, update interface{}) (changed *Changed, err error) {
+	return c.FindAndModifyWithFlags(query, update, nil, false, true, true, nil)
 }
 
 //parse cursor to value.

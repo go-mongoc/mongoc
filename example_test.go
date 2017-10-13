@@ -1,36 +1,3 @@
-mongoc is golang binding for libmongoc.
-===
-
-## Feature
-
- * using golang high performance pool
- * all needed api is wrapped for libmongoc collection/client.
- * bluk api come soon.
- * full unit tested and parallel tested
-
-## Install
-
-* download libmongoc from [http://mongoc.org/]
-* install libmongoc to /usr/local/ by 
-
-```.shell
-./configure --disable-automatic-init-and-cleanup --prefix=/usr/local/
-make -j5
-make install
-```
-
-* install by go get
-
-```.shell
-go get gopkg.in/mongoc.v1
-```
-
-note: for window, compile manual and export CGO_CFLAGS/CGO_LDFLAGS then get package.
-
-
-## Example
-
-```.go
 package mongoc_test
 
 import bson "gopkg.in/bson.v2"
@@ -168,4 +135,3 @@ func ExamplePool() {
 	// user2 removed
 	// index created
 }
-```

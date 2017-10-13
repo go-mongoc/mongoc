@@ -2,6 +2,7 @@ package mongoc
 
 import (
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	bson "gopkg.in/bson.v2"
@@ -88,7 +89,7 @@ func TestMongoc(t *testing.T) {
 	//find and modify
 	//
 	var one = map[string]interface{}{}
-	err = col.FindAndModify(
+	changed, err := col.FindAndModify(
 		bson.M{
 			"b": 2,
 		},
@@ -104,6 +105,55 @@ func TestMongoc(t *testing.T) {
 		t.Error(err)
 		return
 	}
+	if !changed.Matched || changed.Updated != 1 {
+		t.Errorf("%v", changed)
+		return
+	}
+	fmt.Println(one)
+	//
+	one = map[string]interface{}{}
+	changed, err = col.FindAndModify(
+		bson.M{
+			"b": 122,
+		},
+		bson.M{
+			"$set": bson.M{
+				"b": 300,
+			},
+		}, bson.M{
+			"a": 1,
+			"b": 1,
+		}, false, true, &one)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if changed.Matched || changed.Updated != 0 {
+		t.Errorf("%v", changed)
+		return
+	}
+	fmt.Println(one)
+	//
+	one = map[string]interface{}{}
+	changed, err = col.Upsert(
+		bson.M{
+			"b": 1000,
+		},
+		bson.M{
+			"$set": bson.M{
+				"b": 1300,
+			},
+		})
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if changed.Matched || changed.Updated != 1 {
+		t.Errorf("%v", changed)
+		return
+	}
+	fmt.Println(one)
+	//
 	count, err = col.Count(bson.M{
 		"b": 300,
 	}, 0, 0)
@@ -139,7 +189,7 @@ func TestMongoc(t *testing.T) {
 		return
 	}
 	count, err = col.Count(nil, 0, 0)
-	if err != nil || count != 9 {
+	if err != nil || count != 10 {
 		t.Errorf("count fail %v err:%v", count, err)
 		return
 	}
@@ -160,7 +210,7 @@ func TestMongoc(t *testing.T) {
 	}
 	col2 := pool.C("test", "mongoc2")
 	count, err = col2.Count(nil, 0, 0)
-	if err != nil || count != 9 {
+	if err != nil || count != 10 {
 		t.Errorf("count fail %v err:%v", count, err)
 		return
 	}
@@ -351,22 +401,22 @@ func TestErrCase(t *testing.T) {
 			return
 		}
 		//
-		err = col.FindAndModify(TestErrCase, bson.M{"c": 100}, nil, true, true, nil)
+		_, err = col.FindAndModify(TestErrCase, bson.M{"c": 100}, nil, true, true, nil)
 		if err == nil {
 			t.Error("not error")
 			return
 		}
-		err = col.FindAndModify(nil, TestErrCase, nil, true, true, nil)
+		_, err = col.FindAndModify(nil, TestErrCase, nil, true, true, nil)
 		if err == nil {
 			t.Error("not error")
 			return
 		}
-		err = col.FindAndModify(nil, bson.M{"c": 100}, TestErrCase, true, true, nil)
+		_, err = col.FindAndModify(nil, bson.M{"c": 100}, TestErrCase, true, true, nil)
 		if err == nil {
 			t.Error("not error")
 			return
 		}
-		err = col.FindAndModify(nil, nil, nil, true, true, nil)
+		_, err = col.FindAndModify(nil, nil, nil, true, true, nil)
 		if err == nil {
 			t.Error("not error")
 			return
@@ -474,7 +524,7 @@ func TestServerErrCase(t *testing.T) {
 			return
 		}
 		//
-		err = col.FindAndModify(nil, bson.M{"c": 100}, nil, true, true, nil)
+		_, err = col.FindAndModify(nil, bson.M{"c": 100}, nil, true, true, nil)
 		if err == nil {
 			t.Error("not error")
 			return
@@ -535,4 +585,90 @@ func TestLog(t *testing.T) {
 	LogHandler(LogLevelTrace, "testing", "6")
 	LogHandler(LogLevelWarning, "testing", "7")
 	LogHandler(1000, "testing", "7")
+}
+
+func runCreateFind(col *Collection, rid int64) {
+	err := col.Insert(map[string]interface{}{
+		"bench":   rid,
+		"testing": "testing",
+	})
+	if err != nil {
+		panic(err)
+	}
+	res := []map[string]interface{}{}
+	err = col.Find(bson.M{
+		"bench":   rid,
+		"testing": "testing",
+	}, nil, 0, 1, &res)
+	if err != nil {
+		panic(err)
+	}
+	if len(res) < 1 {
+		panic("not found")
+	}
+	if res[0]["bench"].(int64) != rid {
+		panic("data error")
+	}
+}
+
+func TestCreateFind(t *testing.T) {
+	pool := NewPool("mongodb://loc.m:27017", 100, 1)
+	col := pool.C("test", "mongoc")
+	col.Remove(nil, false)
+	err := pool.Execute("test", bson.D{
+		{
+			Name:  "createIndexes",
+			Value: "mongoc",
+		},
+		{
+			Name: "indexes",
+			Value: []bson.M{
+				bson.M{
+					"name": "bench",
+					"key": bson.M{
+						"bench": 1,
+					},
+				},
+			},
+		},
+	}, nil, &bson.M{})
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	runCreateFind(col, 0)
+}
+
+func BenchmarkMongoc(b *testing.B) {
+	pool := NewPool("mongodb://10.211.55.23:27017", 10, 1)
+	col := pool.C("test", "mongoc")
+	ridx := int64(0)
+	col.Remove(nil, false)
+	err := pool.Execute("test", bson.D{
+		{
+			Name:  "createIndexes",
+			Value: "mongoc",
+		},
+		{
+			Name: "indexes",
+			Value: []bson.M{
+				bson.M{
+					"name": "bench",
+					"key": bson.M{
+						"bench": 1,
+					},
+				},
+			},
+		},
+	}, nil, &bson.M{})
+	if err != nil {
+		b.Error(err)
+		return
+	}
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			rid := atomic.AddInt64(&ridx, 1)
+			runCreateFind(col, rid)
+		}
+	})
 }

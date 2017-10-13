@@ -18,7 +18,7 @@ pkgs="\
 # echo "mode: set" > a.out
 for p in $pkgs;
 do
- go test -v --coverprofile=a.out $p
+ go test -v -bench=^.*$ --coverprofile=a.out $p
 #  cat c.out | grep -v "mode" >>a.out
 done
 gocov convert a.out > coverage.json
