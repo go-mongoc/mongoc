@@ -913,6 +913,48 @@ func TestIndexes(t *testing.T) {
 	if !(xa && xb) {
 		t.Error("error")
 	}
+	//
+	//test collection not exist
+	err = col.Drop()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	err = SharedCheckIndex( //drop first
+		map[string][]*Index{
+			"testindex": []*Index{
+				{
+					Name: "xa",
+					Key: map[string]int{
+						"xa": 1,
+					},
+				},
+			},
+		}, true)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	err = col.Drop()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	err = SharedCheckIndex( //not drop first
+		map[string][]*Index{
+			"testindex": []*Index{
+				{
+					Name: "xa",
+					Key: map[string]int{
+						"xa": 1,
+					},
+				},
+			},
+		}, false)
+	if err != nil {
+		t.Error(err)
+		return
+	}
 }
 
 func TestCreateFind(t *testing.T) {

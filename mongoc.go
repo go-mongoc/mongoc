@@ -1291,11 +1291,15 @@ func (c *Collection) CheckIndex(clear bool, indexes ...*Index) (err error) {
 		var having []*Index
 		having, err = c.ListIndexes()
 		if err != nil {
-			errorLog("pool list all index on collection(%v.%v) fail with %v", c.DbName, c.Name, err)
-			return
-		}
-		for _, index := range having {
-			mapHaving[index.Name] = index
+			//the collection not exists error.
+			if berr, ok := (err.(*BSONError)); !(ok && berr.IsCollectionNotExist()) {
+				errorLog("pool list all index on collection(%v.%v) fail with %v", c.DbName, c.Name, err)
+				return
+			}
+		} else {
+			for _, index := range having {
+				mapHaving[index.Name] = index
+			}
 		}
 	}
 	newList := []*Index{}
