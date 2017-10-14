@@ -105,6 +105,18 @@ var ErrServerSelectionFailure = uint32(C.MONGOC_ERROR_SERVER_SELECTION_FAILURE)
 //ErrCollectionNotExist is wrapper of C.MONGOC_ERROR_COLLECTION_DOES_NOT_EXIST
 var ErrCollectionNotExist = uint32(C.MONGOC_ERROR_COLLECTION_DOES_NOT_EXIST)
 
+//ErrDuplicateKey is wrapper of C.MONGOC_ERROR_DUPLICATE_KEY
+var ErrDuplicateKey = uint32(C.MONGOC_ERROR_DUPLICATE_KEY)
+
+//ErrCommandInvalidArg is wrapper of C.MONGOC_ERROR_COMMAND_INVALID_ARG
+var ErrCommandInvalidArg = uint32(C.MONGOC_ERROR_COMMAND_INVALID_ARG)
+
+//ErrNamespaceInvalid is wrapper of C.MONGOC_ERROR_NAMESPACE_INVALID
+var ErrNamespaceInvalid = uint32(C.MONGOC_ERROR_NAMESPACE_INVALID)
+
+//ErrNamespaceInvalidFilterType is wrapper of C.MONGOC_ERROR_NAMESPACE_INVALID_FILTER_TYPE
+var ErrNamespaceInvalidFilterType = uint32(C.MONGOC_ERROR_NAMESPACE_INVALID_FILTER_TYPE)
+
 //ErrNotFound is the defined error for document not found.
 var ErrNotFound = fmt.Errorf("not found")
 
@@ -220,10 +232,10 @@ func (b *BSONError) Error() string {
 	return fmt.Sprintf("BSONError(domain:%v,code:%v,message:%v)", b.Domain, b.Code, b.Message)
 }
 
-//IsServerSelectFail check the error if is server select fail.
-func (b *BSONError) IsServerSelectFail() bool {
-	return b.Code == ErrServerSelectionFailure
-}
+// //IsServerSelectFail check the error if is server select fail.
+// func (b *BSONError) IsServerSelectFail() bool {
+// 	return b.Code == ErrServerSelectionFailure
+// }
 
 //IsCollectionNotExist check the error if is collection not exist
 func (b *BSONError) IsCollectionNotExist() bool {
@@ -248,7 +260,25 @@ func (d *DefaultErrorFilter) IsNormalError(err error) bool {
 		return true
 	}
 	berr, ok := err.(*BSONError)
-	return ok && berr.IsCollectionNotExist()
+	if !ok {
+		return false
+	}
+	switch berr.Code {
+	case ErrServerSelectionFailure:
+		return false
+	case ErrCollectionNotExist:
+		return true
+	case ErrDuplicateKey:
+		return true
+	case ErrCommandInvalidArg:
+		return true
+	case ErrNamespaceInvalid:
+		return true
+	case ErrNamespaceInvalidFilterType:
+		return true
+	default:
+		return false
+	}
 }
 
 //IsTempError check the error if it is temp error, meaning the connection is not available current.
@@ -257,7 +287,7 @@ func (d *DefaultErrorFilter) IsTempError(err error) bool {
 		return true
 	}
 	berr, ok := err.(*BSONError)
-	return ok && berr.IsServerSelectFail()
+	return ok && berr.Code == ErrServerSelectionFailure
 }
 
 /**** bson ****/
