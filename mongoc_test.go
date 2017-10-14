@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	bson "gopkg.in/bson.v2"
 )
@@ -16,7 +17,7 @@ func TestMongoc(t *testing.T) {
 	pool := NewPool("mongodb://loc.m:27017", 100, 10)
 	col := pool.C("test", "mongoc")
 	//clear
-	err := col.Remove(nil, false)
+	err := col.RemoveAll(nil)
 	if err != nil {
 		t.Error(err)
 		return
@@ -28,10 +29,17 @@ func TestMongoc(t *testing.T) {
 	}
 	//insert
 	for i := 0; i < 10; i++ {
+		rid := bson.NewObjectId().Hex()
 		err = col.Insert(map[string]interface{}{
-			"a": i,
-			"b": i % 3,
+			"_id": rid,
+			"a":   i,
+			"b":   i % 3,
 		})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		err = col.FindID(rid, nil, &bson.M{})
 		if err != nil {
 			t.Error(err)
 			return
@@ -45,13 +53,37 @@ func TestMongoc(t *testing.T) {
 	//find
 	//
 	var res = []map[string]interface{}{}
-	err = col.Find(bson.M{
-		"a": 1,
-	}, bson.M{
-		"a": 1,
-	}, 0, 0, &res)
+	err = col.Find(
+		bson.M{
+			"a": 1,
+		}, bson.M{
+			"a": 1,
+		}, 0, 0, &res)
 	if err != nil || len(res) != 1 {
 		t.Errorf("find fail %v err:%v", len(res), err)
+		return
+	}
+	var one = map[string]interface{}{}
+	err = col.FindOne(
+		bson.M{
+			"a": 1,
+		}, bson.M{
+			"a": 1,
+		}, &one)
+	if err != nil {
+		t.Errorf("find fail with err:%v", err)
+		return
+	}
+	//
+	one = map[string]interface{}{}
+	err = col.FindOne(
+		bson.M{
+			"a": 199223,
+		}, bson.M{
+			"a": 1,
+		}, &one)
+	if err != ErrNotFound {
+		t.Errorf("find fail with err:%v", err)
 		return
 	}
 	//
@@ -88,7 +120,7 @@ func TestMongoc(t *testing.T) {
 	}
 	//find and modify
 	//
-	var one = map[string]interface{}{}
+	one = map[string]interface{}{}
 	changed, err := col.FindAndModify(
 		bson.M{
 			"b": 2,
@@ -238,6 +270,170 @@ func TestMongoc(t *testing.T) {
 	pool.Close()
 }
 
+func TestErrorFilter(t *testing.T) {
+	ef := &DefaultErrorFilter{}
+	if !ef.IsNormalError(nil) || ef.IsNormalError(fmt.Errorf("error")) || ef.IsNormalError(&BSONError{}) ||
+		!ef.IsNormalError(&BSONError{Code: ErrCollectionNotExist}) {
+		t.Error("error")
+		return
+	}
+	if !ef.IsTempError(nil) || ef.IsTempError(fmt.Errorf("error")) || ef.IsTempError(&BSONError{}) ||
+		!ef.IsTempError(&BSONError{Code: ErrServerSelectionFailure}) {
+		t.Error("error")
+		return
+	}
+}
+
+func TestPool(t *testing.T) {
+	//test normal pool
+	{
+		pool := NewPool("mongodb://loc.m:27017", 1, 10)
+		//
+		//check pop
+		client := pool.Pop()
+		pool.Push(client)
+		client2 := pool.Pop()
+		if client != client2 {
+			t.Error("the client error")
+			return
+		}
+		pool.Push(client2)
+		fmt.Println("check pop...")
+		//
+		//check ping
+		client = pool.Pop()
+		client.LastError = &BSONError{Message: "other error"}
+		pool.Push(client)
+		client2 = pool.Pop()
+		if client != client2 {
+			t.Error("the client error")
+			return
+		}
+		pool.Push(client2)
+		fmt.Println("check ping...")
+	}
+	//test not reach, new timeout
+	{
+		fmt.Println("test new timeout is started...")
+		pool := NewPool("mongodb://127.0.0.1:17017", 1, 10)
+		pool.Timeout = 100 * time.Millisecond
+		func() {
+			defer func() {
+				err := recover()
+				if err == nil {
+					t.Error("not error")
+				} else {
+					fmt.Println("test new timeout passed")
+				}
+			}()
+			pool.Pop()
+		}()
+		fmt.Println("test new timeout done...")
+	}
+	//test not reach, ping timeout
+	{
+		fmt.Println("test ping timeout is started...")
+		pool := NewPool("mongodb://127.0.0.1:17017", 1, 10)
+		pool.Timeout = 100 * time.Millisecond
+		pool.Err = &errFilter{Temp: true}
+		//manual create client.
+		<-pool.max
+		client, _ := newClient(pool.URI)
+		client.LastError = &BSONError{Message: "other error"}
+		pool.Push(client)
+		func() {
+			defer func() {
+				err := recover()
+				if err == nil {
+					t.Error("not error")
+				} else {
+					fmt.Println("test ping timeout passed")
+				}
+			}()
+			pool.Pop()
+		}()
+		fmt.Println("test ping timeout done...")
+	}
+	//test ping error
+	{
+		fmt.Println("test ping error is started...")
+		pool := NewPool("mongodb://127.0.0.1:17017", 1, 10)
+		pool.Timeout = 100 * time.Millisecond
+		pool.Err = &errFilter{Temp: false}
+		//manual create client.
+		<-pool.max
+		client, _ := newClient(pool.URI)
+		client.LastError = &BSONError{Message: "other error"}
+		pool.Push(client)
+		func() {
+			defer func() {
+				err := recover()
+				if err == nil {
+					t.Error("not error")
+				} else {
+					fmt.Println("test ping error passed")
+				}
+			}()
+			pool.Pop()
+		}()
+		fmt.Println("test ping error done...")
+	}
+}
+
+type errFilter struct {
+	DefaultErrorFilter
+	Temp bool
+}
+
+func (e *errFilter) IsTempError(err error) bool {
+	return e.Temp
+}
+
+func TestCommand(t *testing.T) {
+	InitShared("mongodb://loc.m:27017", "test")
+	col := SharedC("mongoc")
+	//clear
+	err := col.RemoveAll(nil)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	count, err := col.Count(nil, 0, 0)
+	if err != nil || count != 0 {
+		t.Errorf("count fail %v err:%v", count, err)
+		return
+	}
+	//insert
+	for i := 0; i < 10; i++ {
+		err = col.Insert(map[string]interface{}{
+			"a": i,
+			"b": i % 3,
+		})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+	}
+	count, err = col.Count(nil, 0, 0)
+	if err != nil || count != 10 {
+		t.Errorf("count fail %v err:%v", count, err)
+		return
+	}
+	reply := []bson.M{}
+	// one := bson.M{}
+	err = SharedExecute(
+		bson.D{
+			{
+				Name:  "find",
+				Value: "mongoc",
+			},
+		}, nil, &reply)
+	if err != nil || len(reply) != 10 {
+		t.Errorf("err %v,%v, %v reply", err, reply, len(reply))
+		return
+	}
+	fmt.Println("-->", reply)
+}
 func TestErrCase(t *testing.T) {
 	//test uri invalid
 	func() {
@@ -458,6 +654,16 @@ func TestErrCase(t *testing.T) {
 	// 		return
 	// 	}
 	// }
+	{ //test check index error
+		pool := NewPool("mongodb://loc.m:27017", 100, 10)
+		err := pool.CheckIndex("test", map[string][]*Index{
+			"xkkd": []*Index{&Index{}},
+		}, true)
+		if err == nil {
+			t.Error("not error")
+			return
+		}
+	}
 }
 
 type serverErrPool struct {
@@ -552,6 +758,41 @@ func TestServerErrCase(t *testing.T) {
 			t.Error("not error")
 			return
 		}
+		//
+		//test index.
+		col2 := &Collection{
+			DbName: "test",
+			Name:   "xxxk",
+			Pool:   pool,
+		}
+		err = col2.CheckIndex(true,
+			&Index{
+				Name: "xa",
+				Key: map[string]int{
+					"xa": 1,
+				},
+			})
+		if err == nil {
+			t.Error(err)
+			return
+		}
+		err = col2.CheckIndex(false,
+			&Index{
+				Name: "xa",
+				Key: map[string]int{
+					"xa": 1,
+				},
+			},
+			&Index{
+				Name: "xb",
+				Key: map[string]int{
+					"xb": 1,
+				},
+			})
+		if err == nil {
+			t.Error(err)
+			return
+		}
 	}
 }
 
@@ -611,27 +852,83 @@ func runCreateFind(col *Collection, rid int64) {
 	}
 }
 
+func TestIndexes(t *testing.T) {
+	InitShared("loc.m:27017", "test")
+	col := SharedC("testindex")
+	err := col.Drop()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	err = SharedCheckIndex(
+		map[string][]*Index{
+			"testindex": []*Index{
+				{
+					Name: "xa",
+					Key: map[string]int{
+						"xa": 1,
+					},
+				},
+			},
+		}, true)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	err = SharedCheckIndex(
+		map[string][]*Index{
+			"testindex": []*Index{
+				{
+					Name: "xa",
+					Key: map[string]int{
+						"xa": 1,
+					},
+				},
+				{
+					Name: "xb",
+					Key: map[string]int{
+						"xb": 1,
+					},
+				},
+			},
+		}, false)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	indexes, err := col.ListIndexes()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	var xa, xb bool
+	for _, index := range indexes {
+		switch index.Name {
+		case "xa":
+			xa = true
+		case "xb":
+			xb = true
+		}
+	}
+	if !(xa && xb) {
+		t.Error("error")
+	}
+}
+
 func TestCreateFind(t *testing.T) {
 	pool := NewPool("mongodb://loc.m:27017", 100, 1)
 	col := pool.C("test", "mongoc")
 	col.Remove(nil, false)
-	err := pool.Execute("test", bson.D{
-		{
-			Name:  "createIndexes",
-			Value: "mongoc",
-		},
-		{
-			Name: "indexes",
-			Value: []bson.M{
-				bson.M{
-					"name": "bench",
-					"key": bson.M{
-						"bench": 1,
-					},
+	err := pool.CheckIndex("test", map[string][]*Index{
+		"mongoc": []*Index{
+			{
+				Name: "bench",
+				Key: map[string]int{
+					"bench": 1,
 				},
 			},
 		},
-	}, nil, &bson.M{})
+	}, true)
 	if err != nil {
 		t.Error(err)
 		return
@@ -640,31 +937,25 @@ func TestCreateFind(t *testing.T) {
 }
 
 func BenchmarkMongoc(b *testing.B) {
-	pool := NewPool("mongodb://10.211.55.23:27017", 10, 1)
-	col := pool.C("test", "mongoc")
-	ridx := int64(0)
+	InitShared("loc.m:27017", "test")
+	col := SharedC("mongoc")
 	col.Remove(nil, false)
-	err := pool.Execute("test", bson.D{
-		{
-			Name:  "createIndexes",
-			Value: "mongoc",
-		},
-		{
-			Name: "indexes",
-			Value: []bson.M{
-				bson.M{
-					"name": "bench",
-					"key": bson.M{
+	err := SharedCheckIndex(
+		map[string][]*Index{
+			"mongoc": []*Index{
+				{
+					Name: "bench",
+					Key: map[string]int{
 						"bench": 1,
 					},
 				},
 			},
-		},
-	}, nil, &bson.M{})
+		}, false)
 	if err != nil {
 		b.Error(err)
 		return
 	}
+	ridx := int64(0)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			rid := atomic.AddInt64(&ridx, 1)

@@ -107,23 +107,16 @@ func ExamplePool() {
 	{
 		//create index xxx on test.mongoc.
 		//for more seed mongodb craeteIndexes command.
-		err := pool.Execute("test", bson.D{
-			{
-				Name:  "createIndexes",
-				Value: "mongoc",
-			},
-			{
-				Name: "indexes",
-				Value: []bson.M{
-					bson.M{
-						"name": "xxx",
-						"key": bson.M{
-							"xxx": 1,
-						},
+		err := pool.CheckIndex("test", map[string][]*mongoc.Index{
+			"mongoc": {
+				{
+					Name: "xxx",
+					Key: map[string]int{
+						"xxx": 1,
 					},
 				},
 			},
-		}, nil, &bson.M{})
+		}, false)
 		if err != nil {
 			panic(err)
 		}
