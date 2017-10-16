@@ -15,7 +15,7 @@ func SharedC(name string) *Collection {
 
 //InitShared will create the SharedPool and set SharedDbName.
 func InitShared(uri, dbname string) {
-	SharedPool = NewPool(uri, uint32(runtime.NumCPU()), 1)
+	SharedPool = NewPool(uri, uint32(runtime.NumCPU()*3), 1)
 	SharedDbName = dbname
 }
 

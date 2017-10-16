@@ -80,7 +80,7 @@ func ExamplePool() {
 		fmt.Println(users[0].Username, "found")
 		//
 		// remove
-		err = col.Remove(
+		_, err = col.Remove(
 			bson.M{
 				"username": "user2",
 				"password": "54321",

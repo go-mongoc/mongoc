@@ -17,7 +17,7 @@ func TestMongoc(t *testing.T) {
 	pool := NewPool("mongodb://loc.m:27017", 100, 10)
 	col := pool.C("test", "mongoc")
 	//clear
-	err := col.RemoveAll(nil)
+	_, err := col.RemoveAll(nil)
 	if err != nil {
 		t.Error(err)
 		return
@@ -48,6 +48,11 @@ func TestMongoc(t *testing.T) {
 	count, err = col.Count(nil, 0, 0)
 	if err != nil || count != 10 {
 		t.Errorf("count fail %v err:%v", count, err)
+		return
+	}
+	bvals, err := col.Distinct("b", nil)
+	if err != nil || len(bvals) != 3 {
+		t.Errorf("count fail %v err:%v", len(bvals), err)
 		return
 	}
 	//find
@@ -215,8 +220,8 @@ func TestMongoc(t *testing.T) {
 	}
 	//remove
 	//
-	err = col.Remove(nil, true)
-	if err != nil {
+	removed, err := col.Remove(nil, true)
+	if err != nil || removed != 1 {
 		t.Error(err)
 		return
 	}
@@ -393,7 +398,7 @@ func TestCommand(t *testing.T) {
 	InitShared("mongodb://loc.m:27017", "test")
 	col := SharedC("mongoc")
 	//clear
-	err := col.RemoveAll(nil)
+	_, err := col.RemoveAll(nil)
 	if err != nil {
 		t.Error(err)
 		return
@@ -537,7 +542,7 @@ func TestErrCase(t *testing.T) {
 	{
 		pool := NewPool("mongodb://loc.m:27017", 100, 10)
 		col := pool.C("test", "mongoc")
-		err := col.Remove(TestErrCase, false)
+		_, err := col.Remove(TestErrCase, false)
 		if err == nil {
 			t.Error("not error")
 			return
@@ -747,7 +752,7 @@ func TestServerErrCase(t *testing.T) {
 			return
 		}
 		//
-		err = col.Remove(nil, false)
+		_, err = col.Remove(nil, false)
 		if err == nil {
 			t.Error("not error")
 			return
@@ -789,6 +794,14 @@ func TestServerErrCase(t *testing.T) {
 					"xb": 1,
 				},
 			})
+		if err == nil {
+			t.Error(err)
+			return
+		}
+		//
+		bulk := col2.NewBulk(false)
+		bulk.Insert(bson.M{"a": 1})
+		_, err = bulk.Execute()
 		if err == nil {
 			t.Error(err)
 			return
@@ -952,6 +965,140 @@ func TestIndexes(t *testing.T) {
 			},
 		}, false)
 	if err != nil {
+		t.Error(err)
+		return
+	}
+}
+
+func TestBulk(t *testing.T) {
+	pool := NewPool("mongodb://loc.m:27017", 100, 1)
+	col := pool.C("test", "mongoc")
+	col.Remove(nil, false)
+	docs := []interface{}{}
+	for i := 0; i < 10; i++ {
+		docs = append(docs, bson.M{
+			"a": 1,
+			"b": i % 3,
+		})
+	}
+	bulk := col.NewBulk(true)
+	bulk.Insert(docs...)
+	bulk.Remove(bson.M{ //remove a:2,a:5,a:8
+		"b": 2,
+	})
+	bulk.RemoveOne(bson.M{ //remove a:9
+		"a": 9,
+	})
+	bulk.Replace(bson.M{ //replace a:0
+		"a": 0,
+	}, bson.M{
+		"a": 200,
+		"b": 0,
+	}, false)
+	bulk.Update( //update a:1,a:4,a:7
+		bson.M{
+			"b": 1,
+		}, bson.M{
+			"$set": bson.M{
+				"b": 100,
+			},
+		}, false)
+	bulk.UpdateOne( //update a:6
+		bson.M{
+			"a": 6,
+		}, bson.M{
+			"$set": bson.M{
+				"a": 100,
+			},
+		}, false)
+	reply, err := bulk.Execute()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if reply.Inserted != 10 || reply.Matched != 3 ||
+		reply.Modified != 3 || reply.Removed != 3 ||
+		reply.Upserted != 0 || len(reply.Errors) > 0 {
+		fmt.Println(reply)
+		t.Error(reply)
+		return
+	}
+	//
+	//test bulk error
+	//
+	bulk = col.NewBulk(true)
+	bulk.Insert(nil)
+	_, err = bulk.Execute()
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	//
+	bulk = col.NewBulk(true)
+	bulk.Remove(nil)
+	_, err = bulk.Execute()
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	//
+	bulk = col.NewBulk(true)
+	bulk.RemoveOne(nil)
+	_, err = bulk.Execute()
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	//
+	bulk = col.NewBulk(true)
+	bulk.Replace(bson.M{
+		"a": 0,
+	}, nil, false)
+	_, err = bulk.Execute()
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	bulk = col.NewBulk(true)
+	bulk.Replace(nil, nil, false)
+	_, err = bulk.Execute()
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	//
+	bulk = col.NewBulk(true)
+	bulk.Update(
+		bson.M{
+			"b": 1,
+		}, nil, false)
+	_, err = bulk.Execute()
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	bulk = col.NewBulk(true)
+	bulk.Update(nil, nil, false)
+	_, err = bulk.Execute()
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	//
+	bulk = col.NewBulk(true)
+	bulk.UpdateOne(
+		bson.M{
+			"b": 1,
+		}, nil, false)
+	_, err = bulk.Execute()
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	bulk = col.NewBulk(true)
+	bulk.UpdateOne(nil, nil, false)
+	_, err = bulk.Execute()
+	if err == nil {
 		t.Error(err)
 		return
 	}

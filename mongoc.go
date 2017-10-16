@@ -875,9 +875,8 @@ func (c *Collection) UpdateMany(selector, update interface{}) (err error) {
 }
 
 //Remove document to database by single
-func (c *Collection) Remove(selector interface{}, single bool) (err error) {
+func (c *Collection) Remove(selector interface{}, single bool) (n int, err error) {
 	var client = c.Pool.Pop()
-	var col = client.rawCollection(c.DbName, c.Name)
 	var rawSelector *C.bson_t
 	defer func() {
 		client.Close()
@@ -892,20 +891,35 @@ func (c *Collection) Remove(selector interface{}, single bool) (err error) {
 	if err != nil {
 		return
 	}
-	var flags = C.MONGOC_REMOVE_NONE
-	if single {
-		flags = flags | C.MONGOC_REMOVE_SINGLE_REMOVE
+	var delete = bson.M{
+		"q": selector,
 	}
-	var berr C.bson_error_t
-	if !C.mongoc_collection_remove(col.raw, C.mongoc_remove_flags_t(flags), rawSelector, nil, &berr) {
-		err = parseBSONError(&berr)
-		client.LastError = err
+	if single {
+		delete["limit"] = 1
+	} else {
+		delete["limit"] = 0
+	}
+	var reply = bson.M{}
+	err = client.Execute(c.DbName, bson.D{
+		{
+			Name:  "delete",
+			Value: c.Name,
+		},
+		{
+			Name: "deletes",
+			Value: []bson.M{
+				delete,
+			},
+		},
+	}, nil, &reply)
+	if err == nil {
+		n = reply["n"].(int)
 	}
 	return
 }
 
 //RemoveAll document to database
-func (c *Collection) RemoveAll(selector interface{}) (err error) {
+func (c *Collection) RemoveAll(selector interface{}) (n int, err error) {
 	return c.Remove(selector, false)
 }
 
@@ -1223,6 +1237,40 @@ func (c *Collection) Stats(options, v interface{}) (err error) {
 	return
 }
 
+//Distinct will call the distinct command to database.
+func (c *Collection) Distinct(key string, query interface{}) (vals []interface{}, err error) {
+	var client = c.Pool.Pop()
+	var rawSelector *C.bson_t
+	defer func() {
+		client.Close()
+		if rawSelector != nil {
+			C.bson_destroy(rawSelector)
+		}
+	}()
+	if query == nil {
+		query = map[string]interface{}{}
+	}
+	var reply = bson.M{}
+	err = client.Execute(c.DbName, bson.D{
+		{
+			Name:  "distinct",
+			Value: c.Name,
+		},
+		{
+			Name:  "key",
+			Value: key,
+		},
+		{
+			Name:  "query",
+			Value: query,
+		},
+	}, nil, &reply)
+	if err == nil {
+		vals = reply["values"].([]interface{})
+	}
+	return
+}
+
 //Index is the struct to create the mongodb index.
 //for more https://docs.mongodb.com/manual/reference/command/createIndexes/
 type Index struct {
@@ -1347,5 +1395,186 @@ func (c *Collection) CheckIndex(clear bool, indexes ...*Index) (err error) {
 	if err != nil {
 		errorLog("pool create index on collection(%v.%v) fail with %v", c.DbName, c.Name, err)
 	}
+	return
+}
+
+//NewBulk will create on bulk.
+//ordered:If the operations must be performed in order.
+func (c *Collection) NewBulk(ordered bool) *Bulk {
+	return &Bulk{
+		C:       c,
+		Ordered: ordered,
+	}
+}
+
+//BulkReply is bulk result.
+type BulkReply struct {
+	Opid     int
+	Inserted int           `bson:"nInserted"`
+	Modified int           `bson:"nModified"`
+	Matched  int           `bson:"nMatched"`
+	Removed  int           `bson:"nRemoved"`
+	Upserted int           `bson:"nUpserted"`
+	Errors   []interface{} `bson:"writeErrors"`
+}
+
+//Operator is one bluk operator.
+type Operator struct {
+	Type   string        //the operator type
+	Values []interface{} //the operator arguments.
+}
+
+//Bulk is wrapper of C.mongoc_bulk_t,
+//it provides an abstraction for submitting multiple write operations as a single batch.
+type Bulk struct {
+	Cmds    []*Operator
+	C       *Collection
+	Ordered bool
+}
+
+//Insert is wrapper of C.mongoc_bulk_operation_insert(),
+//it will insert multi document to database by adding multi insert bulk operator.
+func (b *Bulk) Insert(docs ...interface{}) {
+	for _, doc := range docs {
+		b.Cmds = append(b.Cmds, &Operator{
+			Type:   "insert",
+			Values: []interface{}{doc},
+		})
+	}
+}
+
+//Remove is wrapper of C.mongoc_bulk_operation_remove(),
+//it will remove multi document from database by selector.
+func (b *Bulk) Remove(selector interface{}) {
+	b.Cmds = append(b.Cmds, &Operator{
+		Type:   "remove",
+		Values: []interface{}{selector},
+	})
+}
+
+//RemoveOne is wrapper of C.mongoc_bulk_operation_remove_one(),
+//it will remove one document from database by selector.
+func (b *Bulk) RemoveOne(selector interface{}) {
+	b.Cmds = append(b.Cmds, &Operator{
+		Type:   "removeOne",
+		Values: []interface{}{selector},
+	})
+}
+
+//Replace is wrapper of C.mongoc_bulk_operation_replace(),
+//it will replace document from database by selector and new document.
+func (b *Bulk) Replace(selector, document interface{}, upsert bool) {
+	b.Cmds = append(b.Cmds, &Operator{
+		Type:   "replace",
+		Values: []interface{}{selector, document, upsert},
+	})
+}
+
+//Update is wrapper of C.mongoc_bulk_operation_update(),
+//it will update multi document from database by selector and update options.
+func (b *Bulk) Update(selector, document interface{}, upsert bool) {
+	b.Cmds = append(b.Cmds, &Operator{
+		Type:   "update",
+		Values: []interface{}{selector, document, upsert},
+	})
+}
+
+//UpdateOne is wrapper of C.mongoc_bulk_operation_update(),
+//it will update one document from database by selector and update options.
+func (b *Bulk) UpdateOne(selector, document interface{}, upsert bool) {
+	b.Cmds = append(b.Cmds, &Operator{
+		Type:   "updateOne",
+		Values: []interface{}{selector, document, upsert},
+	})
+}
+
+//Execute is wrapper of C.mongoc_bulk_operation_execute(),
+//it will commit all execute to database.
+func (b *Bulk) Execute() (reply *BulkReply, err error) {
+	var client = b.C.Pool.Pop()
+	var col = client.rawCollection(b.C.DbName, b.C.Name)
+	var rawBluk = C.mongoc_collection_create_bulk_operation(col.raw, C.bool(b.Ordered), nil)
+	defer func() {
+		client.Close()
+		C.mongoc_bulk_operation_destroy(rawBluk)
+	}()
+	for _, cmd := range b.Cmds {
+		switch cmd.Type {
+		case "insert":
+			rawDoc, terr := parseBSON(cmd.Values[0])
+			if terr != nil {
+				err = terr
+				return
+			}
+			C.mongoc_bulk_operation_insert(rawBluk, rawDoc)
+		case "remove":
+			rawSelector, terr := parseBSON(cmd.Values[0])
+			if terr != nil {
+				err = terr
+				return
+			}
+			C.mongoc_bulk_operation_remove(rawBluk, rawSelector)
+		case "removeOne":
+			rawSelector, terr := parseBSON(cmd.Values[0])
+			if terr != nil {
+				err = terr
+				return
+			}
+			C.mongoc_bulk_operation_remove_one(rawBluk, rawSelector)
+		case "replace":
+			rawSelector, terr := parseBSON(cmd.Values[0])
+			if terr != nil {
+				err = terr
+				return
+			}
+			rawDoc, terr := parseBSON(cmd.Values[1])
+			if terr != nil {
+				err = terr
+				return
+			}
+			upsert := (cmd.Values[2]).(bool)
+			C.mongoc_bulk_operation_replace_one(rawBluk, rawSelector, rawDoc, C.bool(upsert))
+		case "update":
+			rawSelector, terr := parseBSON(cmd.Values[0])
+			if terr != nil {
+				err = terr
+				return
+			}
+			rawDoc, terr := parseBSON(cmd.Values[1])
+			if terr != nil {
+				err = terr
+				return
+			}
+			upsert := (cmd.Values[2]).(bool)
+			C.mongoc_bulk_operation_update(rawBluk, rawSelector, rawDoc, C.bool(upsert))
+		case "updateOne":
+			rawSelector, terr := parseBSON(cmd.Values[0])
+			if terr != nil {
+				err = terr
+				return
+			}
+			rawDoc, terr := parseBSON(cmd.Values[1])
+			if terr != nil {
+				err = terr
+				return
+			}
+			upsert := (cmd.Values[2]).(bool)
+			C.mongoc_bulk_operation_update_one(rawBluk, rawSelector, rawDoc, C.bool(upsert))
+		}
+	}
+	var breply C.bson_t
+	var berr C.bson_error_t
+	var opid = int(C.mongoc_bulk_operation_execute(rawBluk, &breply, &berr))
+	if opid < 1 {
+		err = parseBSONError(&berr)
+		client.LastError = err
+	} else {
+		var str = C.bson_get_data(&breply)
+		mbys := C.GoBytes(unsafe.Pointer(str), C.int(breply.len))
+		reply = &BulkReply{}
+		err = bson.Unmarshal(mbys, reply)
+		reply.Opid = opid
+	}
+	C.bson_destroy(&breply)
 	return
 }
