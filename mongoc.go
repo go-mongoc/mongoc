@@ -17,9 +17,12 @@ void mongoc_cgo_init();
 */
 import "C"
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -95,6 +98,29 @@ var QueryExhaust = QueryFlags(C.MONGOC_QUERY_EXHAUST)
 //for more: http://mongoc.org/libmongoc/current/mongoc_query_flags_t.html
 var QueryPartial = QueryFlags(C.MONGOC_QUERY_PARTIAL)
 
+/**** error ****/
+
+//ErrServerSelectionFailure is wrapper of C.MONGOC_ERROR_SERVER_SELECTION_FAILURE
+var ErrServerSelectionFailure = uint32(C.MONGOC_ERROR_SERVER_SELECTION_FAILURE)
+
+//ErrCollectionNotExist is wrapper of C.MONGOC_ERROR_COLLECTION_DOES_NOT_EXIST
+var ErrCollectionNotExist = uint32(C.MONGOC_ERROR_COLLECTION_DOES_NOT_EXIST)
+
+//ErrDuplicateKey is wrapper of C.MONGOC_ERROR_DUPLICATE_KEY
+var ErrDuplicateKey = uint32(C.MONGOC_ERROR_DUPLICATE_KEY)
+
+//ErrCommandInvalidArg is wrapper of C.MONGOC_ERROR_COMMAND_INVALID_ARG
+var ErrCommandInvalidArg = uint32(C.MONGOC_ERROR_COMMAND_INVALID_ARG)
+
+//ErrNamespaceInvalid is wrapper of C.MONGOC_ERROR_NAMESPACE_INVALID
+var ErrNamespaceInvalid = uint32(C.MONGOC_ERROR_NAMESPACE_INVALID)
+
+//ErrNamespaceInvalidFilterType is wrapper of C.MONGOC_ERROR_NAMESPACE_INVALID_FILTER_TYPE
+var ErrNamespaceInvalidFilterType = uint32(C.MONGOC_ERROR_NAMESPACE_INVALID_FILTER_TYPE)
+
+//ErrNotFound is the defined error for document not found.
+var ErrNotFound = fmt.Errorf("not found")
+
 /**** version ****/
 
 //CheckVersion
@@ -135,26 +161,41 @@ func logHandler(logLevel C.mongoc_log_level_t, logDomain *C.char, message *C.cha
 //default is log.Printf("[level] domain:message")
 var LogHandler = DefaultLogHandler
 
+//Log is the default Logger
+var Log = log.New(os.Stdout, "", log.LstdFlags|log.Lshortfile)
+
 //DefaultLogHandler default mongoc log handler. impl by log.Printf("[level] domain:message")
 func DefaultLogHandler(logLevel LogLevel, logDomain, message string) {
 	switch logLevel {
 	case LogLevelError:
-		log.Printf("[E] %v:%v", logDomain, message)
+		Log.Output(3, fmt.Sprintf("E %v:%v", logDomain, message))
 	case LogLevelCritical:
-		log.Printf("[C] %v:%v", logDomain, message)
+		Log.Output(3, fmt.Sprintf("C %v:%v", logDomain, message))
 	case LogLevelWarning:
-		log.Printf("[W] %v:%v", logDomain, message)
+		Log.Output(3, fmt.Sprintf("W %v:%v", logDomain, message))
 	case LogLevelMessage:
-		log.Printf("[M] %v:%v", logDomain, message)
+		Log.Output(3, fmt.Sprintf("M %v:%v", logDomain, message))
 	case LogLevelInfo:
-		log.Printf("[I] %v:%v", logDomain, message)
+		Log.Output(3, fmt.Sprintf("I %v:%v", logDomain, message))
 	case LogLevelDebug:
-		log.Printf("[D] %v:%v", logDomain, message)
+		Log.Output(3, fmt.Sprintf("D %v:%v", logDomain, message))
 	case LogLevelTrace:
-		log.Printf("[T] %v:%v", logDomain, message)
+		Log.Output(3, fmt.Sprintf("T %v:%v", logDomain, message))
 	default:
-		log.Printf("[U] %v:%v", logDomain, message)
+		Log.Output(3, fmt.Sprintf("U %v:%v", logDomain, message))
 	}
+}
+
+func warnLog(format string, args ...interface{}) {
+	LogHandler(LogLevelWarning, "MGO", fmt.Sprintf(format, args...))
+}
+
+func infoLog(format string, args ...interface{}) {
+	LogHandler(LogLevelInfo, "MGO", fmt.Sprintf(format, args...))
+}
+
+func errorLog(format string, args ...interface{}) {
+	LogHandler(LogLevelError, "MGO", fmt.Sprintf(format, args...))
 }
 
 //LogTraceEnable will enable trace log
@@ -192,9 +233,62 @@ func (b *BSONError) Error() string {
 	return fmt.Sprintf("BSONError(domain:%v,code:%v,message:%v)", b.Domain, b.Code, b.Message)
 }
 
-//IsServerSelectFail check the error if is server select fail.
-func (b *BSONError) IsServerSelectFail() bool {
-	return b.Code == C.MONGOC_ERROR_SERVER_SELECTION_FAILURE
+// //IsServerSelectFail check the error if is server select fail.
+// func (b *BSONError) IsServerSelectFail() bool {
+// 	return b.Code == ErrServerSelectionFailure
+// }
+
+//IsCollectionNotExist check the error if is collection not exist
+func (b *BSONError) IsCollectionNotExist() bool {
+	return b.Code == ErrCollectionNotExist
+}
+
+//ErrorFilter is the interface for filter the error type.
+type ErrorFilter interface {
+	//IsNormalError check the error if it is normal error, meaning the connection is well
+	IsNormalError(err error) bool
+	//IsTempError check the error if it is temp error, meaning the connection is not available current.
+	IsTempError(err error) bool
+}
+
+//DefaultErrorFilter is basic error filter。
+type DefaultErrorFilter struct {
+}
+
+//IsNormalError check the error if it is normal error, meaning the connection is well
+func (d *DefaultErrorFilter) IsNormalError(err error) bool {
+	if err == nil {
+		return true
+	}
+	berr, ok := err.(*BSONError)
+	if !ok {
+		return false
+	}
+	switch berr.Code {
+	case ErrServerSelectionFailure:
+		return false
+	case ErrCollectionNotExist:
+		return true
+	case ErrDuplicateKey:
+		return true
+	case ErrCommandInvalidArg:
+		return true
+	case ErrNamespaceInvalid:
+		return true
+	case ErrNamespaceInvalidFilterType:
+		return true
+	default:
+		return false
+	}
+}
+
+//IsTempError check the error if it is temp error, meaning the connection is not available current.
+func (d *DefaultErrorFilter) IsTempError(err error) bool {
+	if err == nil {
+		return true
+	}
+	berr, ok := err.(*BSONError)
+	return ok && berr.Code == ErrServerSelectionFailure
 }
 
 /**** bson ****/
@@ -258,6 +352,55 @@ func marshalRawBSON(val interface{}) (bval *C.bson_t, err error) {
 
 /**** pool ****/
 
+//parse cursor to value.
+func parseCursor(client *Client, cursor *C.mongoc_cursor_t, val interface{}) (err error) {
+	var doc *C.bson_t
+	targetVal := reflect.Indirect(reflect.ValueOf(val))
+	if targetVal.Kind() == reflect.Slice { //for multi element.
+		elemType := targetVal.Type().Elem()
+		newVal := targetVal
+		for C.mongoc_cursor_next(cursor, &doc) {
+			var str = C.bson_get_data(doc)
+			mbys := C.GoBytes(unsafe.Pointer(str), C.int(doc.len))
+			//
+			elemVal := reflect.New(elemType)
+			elem := elemVal.Interface()
+			err = bson.Unmarshal(mbys, elem)
+			if err != nil {
+				return
+			}
+			newVal = reflect.Append(newVal, reflect.Indirect(elemVal))
+		}
+		targetVal.Set(newVal)
+	} else {
+		elemType := targetVal.Type()
+		var elemVal reflect.Value
+		for C.mongoc_cursor_next(cursor, &doc) { //for one element.
+			var str = C.bson_get_data(doc)
+			mbys := C.GoBytes(unsafe.Pointer(str), C.int(doc.len))
+			//
+			elemVal = reflect.New(elemType)
+			elem := elemVal.Interface()
+			err = bson.Unmarshal(mbys, elem)
+			if err != nil {
+				return
+			}
+			break
+		}
+		if elemVal.IsValid() {
+			targetVal.Set(reflect.Indirect(elemVal))
+		} else {
+			err = ErrNotFound
+		}
+	}
+	var berr C.bson_error_t
+	if C.mongoc_cursor_error(cursor, &berr) {
+		err = parseBSONError(&berr)
+		client.LastError = err
+	}
+	return
+}
+
 //Poolable is interface for pool
 type Poolable interface {
 	Pop() *Client
@@ -277,12 +420,16 @@ type Pool struct {
 	closed  bool
 	//
 	Timeout time.Duration
+	Err     ErrorFilter
 }
 
 //NewPool will create the pool by size.
 func NewPool(uri string, maxSize, minSize uint32) (pool *Pool) {
 	if maxSize < 1 {
 		panic("the pool must greater zero")
+	}
+	if !strings.HasPrefix(uri, "mongodb://") {
+		uri = "mongodb://" + uri
 	}
 	pool = &Pool{
 		pool:    make(chan *Client, maxSize),
@@ -293,6 +440,7 @@ func NewPool(uri string, maxSize, minSize uint32) (pool *Pool) {
 		minSize: minSize,
 		URI:     uri,
 		Timeout: 600 * time.Second,
+		Err:     &DefaultErrorFilter{},
 	}
 	for i := uint32(0); i < maxSize; i++ {
 		pool.max <- 1
@@ -322,24 +470,25 @@ func (p *Pool) Pop() *Client {
 			//check if error is server select fail.
 			//if select fail push back to ping pool and wait for retry
 			//if other fail close it and push back to max pool for create new one.
-			if berr, ok := err.(*BSONError); ok && berr.IsServerSelectFail() {
+			if p.Err.IsTempError(err) {
 				tempDelay *= 2
 				if tempDelay > p.Timeout {
 					panic("pool timeout")
 				}
-				log.Printf("waring: pool ping to server fail with %v, will retry after %v", err, tempDelay)
+				warnLog("pool ping to server fail with %v, will retry after %v", err, tempDelay)
 				time.Sleep(tempDelay)
 				ping.LastError = nil
 				p.ping <- ping //push back to ping pool for retry
 			} else {
-				log.Printf("warning: one client is closed by error:%v", err)
+				warnLog("one client is closed by error:%v", err)
 				ping.Release()
 				p.max <- 1 //push back to max pool, will create new client.
 			}
 		case <-p.max:
+			infoLog("pool is not full, will try create new client")
 			client, err := newClient(p.URI)
 			if err != nil {
-				log.Printf("panic: pool new clien fail with %v", err)
+				errorLog("panic: pool new clien fail with %v", err)
 				panic(err)
 			}
 			client.Pool = p
@@ -353,7 +502,7 @@ func (p *Pool) Pop() *Client {
 			if tempDelay > p.Timeout {
 				panic("pool timeout")
 			}
-			log.Printf("warning: new client fail with ping error:%v, will retry after %v", err, tempDelay)
+			warnLog("new client fail with ping error:%v, will retry after %v", err, tempDelay)
 			time.Sleep(tempDelay)
 			p.max <- 1 //push back to max pool for retry
 		}
@@ -368,11 +517,14 @@ func (p *Pool) Push(client *Client) {
 	if client == nil {
 		panic("the client is nil")
 	}
-	if client.LastError == nil { //client is used well
+	//check error if normal error, if it is true, the connection is well.
+	if p.Err.IsNormalError(client.LastError) {
+		client.LastError = nil
 		p.pool <- client
 		return
 	}
-	log.Printf("warning: one client will push to ping pool with error:%v", client.LastError)
+	//all other error is meaning the connection may be having error.
+	warnLog("one client will push to ping pool with error:%v", client.LastError)
 	client.LastError = nil
 	p.ping <- client //push back to ping pool for retry
 }
@@ -395,6 +547,18 @@ func (p *Pool) Execute(dbname string, cmds, opts, v interface{}) (err error) {
 	defer client.Close()
 	return client.Execute(dbname, cmds, opts, v)
 }
+
+// //Command will query command on db.
+// func (p *Pool) Command(dbname string, query, fields interface{}, skip, limit int, v interface{}) (err error) {
+// 	return p.CommandWithFlags(dbname, QueryNone, query, fields, skip, limit, 100, v)
+// }
+
+// //CommandWithFlags will query command on db.
+// func (p *Pool) CommandWithFlags(dbname string, flags QueryFlags, query, fields interface{}, skip, limit, batchSize int, v interface{}) (err error) {
+// 	client := p.Pop()
+// 	defer client.Close()
+// 	return client.CommandWithFlags(dbname, flags, query, fields, skip, limit, batchSize, v)
+// }
 
 //Close the pool
 func (p *Pool) Close() {
@@ -420,6 +584,15 @@ func (p *Pool) Ping(dbname string) (err error) {
 		"ping": 1,
 	}, nil, &reply)
 	return
+}
+
+//CheckIndex will craete index on collection if it is not exists.
+//if clear is true, will clear all index before create index.
+func (p *Pool) CheckIndex(dbname string, indexes map[string][]*Index, clear bool) (err error) {
+	return CheckIndex(
+		func(name string) *Collection {
+			return p.C(dbname, name)
+		}, indexes, clear)
 }
 
 /**** client ****/
@@ -506,34 +679,91 @@ func (c *Client) Execute(dbname string, cmds, opts, v interface{}) (err error) {
 	if c.raw == nil {
 		panic("raw client is nil")
 	}
-	rawCmds, err := parseBSON(cmds)
+	cdbname := C.CString(dbname)
+	var rawCmds, rawOpts *C.bson_t
+	defer func() {
+		C.free(unsafe.Pointer(cdbname))
+		if rawCmds != nil {
+			C.bson_destroy(rawCmds)
+		}
+		if rawOpts != nil {
+			C.bson_destroy(rawOpts)
+		}
+	}()
+	rawCmds, err = parseBSON(cmds)
 	if err != nil {
 		return
 	}
 	if opts == nil {
 		opts = map[string]interface{}{}
 	}
-	rawOpts, err := parseBSON(opts)
+	rawOpts, err = parseBSON(opts)
 	if err != nil {
 		return
 	}
-	cdbname := C.CString(dbname)
 	var berr C.bson_error_t
-	var doc C.bson_t
-	if C.mongoc_client_read_write_command_with_opts(c.raw, cdbname, rawCmds, nil, rawOpts, &doc, &berr) {
-		var str = C.bson_get_data(&doc)
-		mbys := C.GoBytes(unsafe.Pointer(str), C.int(doc.len))
-		err = bson.Unmarshal(mbys, v)
+	var reply C.bson_t
+	if C.mongoc_client_read_write_command_with_opts(c.raw, cdbname, rawCmds, nil, rawOpts, &reply, &berr) {
+		if reflect.Indirect(reflect.ValueOf(v)).Kind() == reflect.Slice {
+			//reply will destory on mongoc_cursor_new_from_command_reply
+			var cursor = C.mongoc_cursor_new_from_command_reply(c.raw, &reply, 0)
+			err = parseCursor(c, cursor, v)
+			C.mongoc_cursor_destroy(cursor)
+		} else {
+			var str = C.bson_get_data(&reply)
+			mbys := C.GoBytes(unsafe.Pointer(str), C.int(reply.len))
+			err = bson.Unmarshal(mbys, v)
+			C.bson_destroy(&reply)
+		}
 	} else {
 		err = parseBSONError(&berr)
 		c.LastError = err
+		C.bson_destroy(&reply)
 	}
-	C.bson_destroy(&doc)
-	C.free(unsafe.Pointer(cdbname))
-	C.bson_destroy(rawOpts)
-	C.bson_destroy(rawCmds)
 	return
 }
+
+// //Command will query command on db.
+// func (c *Client) Command(dbname string, query, fields interface{}, skip, limit int, v interface{}) (err error) {
+// 	return c.CommandWithFlags(dbname, QueryNone, query, fields, skip, limit, 100, v)
+// }
+
+// //CommandWithFlags will query command on db.
+// func (c *Client) CommandWithFlags(dbname string, flags QueryFlags, query, fields interface{}, skip, limit, batchSize int, v interface{}) (err error) {
+// 	var cdbname = C.CString(dbname)
+// 	var rawQuery, rawFields *C.bson_t
+// 	defer func() {
+// 		C.free(unsafe.Pointer(cdbname))
+// 		if rawQuery != nil {
+// 			C.bson_destroy(rawQuery)
+// 		}
+// 		if rawFields != nil {
+// 			C.bson_destroy(rawFields)
+// 		}
+// 	}()
+// 	if query == nil {
+// 		query = map[string]interface{}{}
+// 	}
+// 	rawQuery, err = parseBSON(query)
+// 	if err != nil {
+// 		return
+// 	}
+// 	if fields == nil {
+// 		fields = map[string]interface{}{}
+// 	}
+// 	rawFields, err = parseBSON(fields)
+// 	if err != nil {
+// 		return
+// 	}
+// 	{ //execute cursor
+// 		fmt.Println("--->")
+// 		var cursor = C.mongoc_client_command(c.raw, cdbname, C.mongoc_query_flags_t(flags),
+// 			C.uint32_t(skip), C.uint32_t(limit), C.uint32_t(batchSize), rawQuery, rawFields, nil)
+// 		err = parseCursor(c, cursor, v)
+// 		C.mongoc_cursor_destroy(cursor)
+// 	}
+// 	return
+// }
 
 //Ping to database.
 func (c *Client) Ping(dbname string) (err error) {
@@ -600,159 +830,184 @@ func (c *Collection) Insert(docs ...interface{}) (err error) {
 	return
 }
 
+//Upserted is the update all return.
+type Upserted struct {
+	Index int         `bson:"index"`
+	ID    interface{} `bson:"_id"`
+}
+
+//WriteError is the command error.
+type WriteError struct {
+	Index   int    `bson:"index"`
+	Code    int    `bson:"code"`
+	Message string `bson:"errmsg"`
+}
+
+//WriteErrors is the WriteError slice.
+type WriteErrors []*WriteError
+
+func (w WriteErrors) Error() string {
+	bys, _ := json.Marshal(w)
+	return string(bys)
+}
+
+type updataReply struct {
+	Changed `bson:",inline"`
+	Errors  WriteErrors `bson:"writeErrors"`
+}
+
 //Update document to database by upsert or manay
-func (c *Collection) Update(selector, update interface{}, upsert, many bool) (err error) {
+func (c *Collection) Update(selector, update interface{}, upsert, many bool) (changed *Changed, err error) {
 	var client = c.Pool.Pop()
-	var col = client.rawCollection(c.DbName, c.Name)
-	var rawSelector, rawUpdate *C.bson_t
-	defer func() {
-		client.Close()
-		if rawSelector != nil {
-			C.bson_destroy(rawSelector)
-		}
-		if rawUpdate != nil {
-			C.bson_destroy(rawUpdate)
-		}
-	}()
 	if selector == nil {
 		selector = map[string]interface{}{}
 	}
-	rawSelector, err = parseBSON(selector)
-	if err != nil {
-		return
-	}
-	rawUpdate, err = parseBSON(update)
-	if err != nil {
-		return
-	}
-	var flags = C.MONGOC_UPDATE_NONE
-	if upsert {
-		flags = flags | C.MONGOC_UPDATE_UPSERT
-	}
-	if many {
-		flags = flags | C.MONGOC_UPDATE_MULTI_UPDATE
-	}
-	var berr C.bson_error_t
-	if !C.mongoc_collection_update(col.raw, C.mongoc_update_flags_t(flags), rawSelector, rawUpdate, nil, &berr) {
-		err = parseBSONError(&berr)
-		client.LastError = err
+	reply := &updataReply{}
+	reply.Changed.Upserted = []*Upserted{}
+	changed = &reply.Changed
+	err = client.Execute(c.DbName, bson.D{
+		{
+			Name:  "update",
+			Value: c.Name,
+		},
+		{
+			Name: "updates",
+			Value: []bson.M{
+				{
+					"q":      selector,
+					"u":      update,
+					"upsert": upsert,
+					"multi":  many,
+				},
+			},
+		},
+	}, nil, reply)
+	if err == nil && len(reply.Errors) > 0 {
+		err = reply.Errors
 	}
 	return
 }
 
 //UpdateMany document to database
-func (c *Collection) UpdateMany(selector, update interface{}) (err error) {
+func (c *Collection) UpdateMany(selector, update interface{}) (chnaged *Changed, err error) {
 	return c.Update(selector, update, false, true)
 }
 
 //Remove document to database by single
-func (c *Collection) Remove(selector interface{}, single bool) (err error) {
+func (c *Collection) Remove(selector interface{}, single bool) (n int, err error) {
 	var client = c.Pool.Pop()
-	var col = client.rawCollection(c.DbName, c.Name)
-	var rawSelector *C.bson_t
-	defer func() {
-		client.Close()
-		if rawSelector != nil {
-			C.bson_destroy(rawSelector)
-		}
-	}()
+	defer client.Close()
 	if selector == nil {
 		selector = map[string]interface{}{}
 	}
-	rawSelector, err = parseBSON(selector)
-	if err != nil {
-		return
+	var delete = bson.M{
+		"q": selector,
 	}
-	var flags = C.MONGOC_REMOVE_NONE
 	if single {
-		flags = flags | C.MONGOC_REMOVE_SINGLE_REMOVE
+		delete["limit"] = 1
+	} else {
+		delete["limit"] = 0
 	}
-	var berr C.bson_error_t
-	if !C.mongoc_collection_remove(col.raw, C.mongoc_remove_flags_t(flags), rawSelector, nil, &berr) {
-		err = parseBSONError(&berr)
-		client.LastError = err
+	var reply = bson.M{}
+	err = client.Execute(c.DbName, bson.D{
+		{
+			Name:  "delete",
+			Value: c.Name,
+		},
+		{
+			Name: "deletes",
+			Value: []bson.M{
+				delete,
+			},
+		},
+	}, nil, &reply)
+	if err == nil {
+		n = reply["n"].(int)
 	}
 	return
 }
 
+//RemoveAll document to database
+func (c *Collection) RemoveAll(selector interface{}) (n int, err error) {
+	return c.Remove(selector, false)
+}
+
 //Changed is the findAndModify reply info.
 type Changed struct {
-	Upserted interface{} `bson:"upserted"`        //the upsert id
-	Matched  bool        `bson:"updatedExisting"` //whether mathced doc updated
-	Updated  int         `bson:"n"`               //row updated.
+	Upserted interface{} `bson:"upserted"`  //the upsert id
+	Matched  int         `bson:"n"`         //row matched
+	Updated  int         `bson:"nModified"` //row updated.
+}
+
+type lastErrorObject struct {
+	Upserted        interface{} `bson:"upserted"`
+	UpdatedExisting bool        `bson:"updatedExisting"`
+	N               int         `bson:"n"`
+	Err             string      `bson:"err"`
+	OK              int         `bson:"ok"`
 }
 
 type findAndModifyReply struct {
-	Changed *Changed    `bson:"lastErrorObject"`
-	Value   interface{} `bson:"value"`
-	Ok      int         `bson:"ok"`
+	Value interface{}     `bson:"value"`
+	Ok    int             `bson:"ok"`
+	Error lastErrorObject `bson:"lastErrorObject"`
 }
 
 //FindAndModifyWithFlags will find and modify document on database.
-func (c *Collection) FindAndModifyWithFlags(query, update, fields interface{}, remove, upsert, retnew bool, v interface{}) (chnaged *Changed, err error) {
+func (c *Collection) FindAndModifyWithFlags(query, update, fields interface{}, remove, upsert, retnew bool, v interface{}) (changed *Changed, err error) {
 	var client = c.Pool.Pop()
-	var col = client.rawCollection(c.DbName, c.Name)
-	var rawQuery, rawSort, rawUpdate, rawFields *C.bson_t
-	defer func() {
-		client.Close()
-		if rawQuery != nil {
-			C.bson_destroy(rawQuery)
-		}
-		// if rawSort != nil {
-		// 	C.bson_destroy(rawSort)
-		// }
-		if rawUpdate != nil {
-			C.bson_destroy(rawUpdate)
-		}
-		if rawFields != nil {
-			C.bson_destroy(rawFields)
-		}
-	}()
+	defer client.Close()
 	if query == nil {
 		query = map[string]interface{}{}
-	}
-	rawQuery, err = parseBSON(query)
-	if err != nil {
-		return
-	}
-	// if sort != nil {
-	// 	rawSort, err = parseBSON(sort)
-	// 	if err != nil {
-	// 		return
-	// 	}
-	// }
-	rawUpdate, err = parseBSON(update)
-	if err != nil {
-		return
 	}
 	if fields == nil {
 		fields = map[string]interface{}{}
 	}
-	rawFields, err = parseBSON(fields)
-	if err != nil {
-		return
+	changed = &Changed{}
+	var reply = findAndModifyReply{
+		Value: v,
 	}
-	chnaged = &Changed{}
-	var berr C.bson_error_t
-	var doc C.bson_t
-	if C.mongoc_collection_find_and_modify(col.raw, rawQuery, rawSort, rawUpdate, rawFields,
-		C.bool(remove), C.bool(upsert), C.bool(retnew), &doc, &berr) {
-		var str = C.bson_get_data(&doc)
-		mbys := C.GoBytes(unsafe.Pointer(str), C.int(doc.len))
-		reply := &findAndModifyReply{}
-		err = bson.Unmarshal(mbys, reply)
-		if err == nil {
-			chnaged = reply.Changed
-			if reply.Value != nil && v != nil {
-				subBys, _ := bson.Marshal(reply.Value)
-				err = bson.Unmarshal(subBys, v)
-			}
+	err = client.Execute(c.DbName, bson.D{
+		{
+			Name:  "findAndModify",
+			Value: c.Name,
+		},
+		{
+			Name:  "query",
+			Value: query,
+		},
+		{
+			Name:  "update",
+			Value: update,
+		},
+		{
+			Name:  "fields",
+			Value: fields,
+		},
+		{
+			Name:  "remove",
+			Value: remove,
+		},
+		{
+			Name:  "upsert",
+			Value: upsert,
+		},
+		{
+			Name:  "new",
+			Value: retnew,
+		},
+	}, nil, &reply)
+	if err == nil {
+		if reply.Ok < 1 {
+			err = fmt.Errorf("%v", reply.Error.Err)
+			return
 		}
-	} else {
-		err = parseBSONError(&berr)
-		client.LastError = err
+		changed.Updated = reply.Error.N
+		if reply.Error.UpdatedExisting {
+			changed.Matched = 1
+		}
+		changed.Upserted = reply.Error.Upserted
 	}
-	C.bson_destroy(&doc)
 	return
 }
 
@@ -764,33 +1019,6 @@ func (c *Collection) FindAndModify(query, update, fields interface{}, upsert, re
 //Upsert will update or insert document to database.
 func (c *Collection) Upsert(query, update interface{}) (changed *Changed, err error) {
 	return c.FindAndModifyWithFlags(query, update, nil, false, true, true, nil)
-}
-
-//parse cursor to value.
-func (c *Collection) parseCursor(client *Client, cursor *C.mongoc_cursor_t, val interface{}) (err error) {
-	var doc *C.bson_t
-	targetVal := reflect.Indirect(reflect.ValueOf(val))
-	elemType := targetVal.Type().Elem()
-	newVal := targetVal
-	for C.mongoc_cursor_next(cursor, &doc) {
-		var str = C.bson_get_data(doc)
-		mbys := C.GoBytes(unsafe.Pointer(str), C.int(doc.len))
-		//
-		elemVal := reflect.New(elemType)
-		elem := elemVal.Interface()
-		err = bson.Unmarshal(mbys, elem)
-		if err != nil {
-			return
-		}
-		newVal = reflect.Append(newVal, reflect.Indirect(elemVal))
-	}
-	targetVal.Set(newVal)
-	var berr C.bson_error_t
-	if C.mongoc_cursor_error(cursor, &berr) {
-		err = parseBSONError(&berr)
-		client.LastError = err
-	}
-	return
 }
 
 //FindWithFlags the document by flags.
@@ -824,7 +1052,7 @@ func (c *Collection) FindWithFlags(flags QueryFlags, query, fields interface{}, 
 	{ //execute cursor
 		var cursor = C.mongoc_collection_find(col.raw, C.mongoc_query_flags_t(flags),
 			C.uint32_t(skip), C.uint32_t(limit), C.uint32_t(batchSize), rawQuery, rawFields, nil)
-		err = c.parseCursor(client, cursor, val)
+		err = parseCursor(client, cursor, val)
 		C.mongoc_cursor_destroy(cursor)
 	}
 	return
@@ -833,6 +1061,16 @@ func (c *Collection) FindWithFlags(flags QueryFlags, query, fields interface{}, 
 //Find the document by flags.
 func (c *Collection) Find(query, fields interface{}, skip, limit int, val interface{}) (err error) {
 	return c.FindWithFlags(QueryNone, query, fields, skip, limit, 100, val)
+}
+
+//FindOne the document by flags.
+func (c *Collection) FindOne(query, fields interface{}, val interface{}) (err error) {
+	return c.FindWithFlags(QueryNone, query, fields, 0, 1, 100, val)
+}
+
+//FindID will find one document by id.
+func (c *Collection) FindID(id string, fields interface{}, val interface{}) (err error) {
+	return c.FindWithFlags(QueryNone, bson.M{"_id": id}, fields, 0, 1, 10, val)
 }
 
 //PipeWithFlags will pipe the document by flags.
@@ -862,7 +1100,7 @@ func (c *Collection) PipeWithFlags(flags QueryFlags, pipeline, opts interface{},
 	}
 	{ //execute cursor
 		var cursor = C.mongoc_collection_aggregate(col.raw, C.mongoc_query_flags_t(flags), rawPipeline, rawOpts, nil)
-		err = c.parseCursor(client, cursor, val)
+		err = parseCursor(client, cursor, val)
 		C.mongoc_cursor_destroy(cursor)
 	}
 	return
@@ -1003,5 +1241,352 @@ func (c *Collection) Stats(options, v interface{}) (err error) {
 		client.LastError = err
 	}
 	C.bson_destroy(&doc)
+	return
+}
+
+type distinctReply struct {
+	Values interface{} `bson:"values"`
+	Ok     int         `bson:"ok"`
+}
+
+//Distinct will call the distinct command to database.
+func (c *Collection) Distinct(key string, query, v interface{}) (err error) {
+	var client = c.Pool.Pop()
+	defer client.Close()
+	if query == nil {
+		query = map[string]interface{}{}
+	}
+	err = client.Execute(c.DbName,
+		bson.D{
+			{
+				Name:  "distinct",
+				Value: c.Name,
+			},
+			{
+				Name:  "key",
+				Value: key,
+			},
+			{
+				Name:  "query",
+				Value: query,
+			},
+		}, nil, &distinctReply{
+			Values: v,
+		})
+	return
+}
+
+//Index is the struct to create the mongodb index.
+//for more https://docs.mongodb.com/manual/reference/command/createIndexes/
+type Index struct {
+	Key                     []string       `bson:"-"`
+	RawKey                  bson.D         `bson:"key"`
+	Name                    string         `bson:"name"`
+	Background              bool           `bson:"background,omitempty"`
+	Unique                  bool           `bson:"unique,omitempty"`
+	PartialFilterExpression bson.M         `bson:"partialFilterExpression,omitempty"`
+	Sparse                  bool           `bson:"sparse,omitempty"`
+	ExpireAfterSeconds      int            `bson:"expireAfterSeconds,omitempty"`
+	StorageEngine           bson.M         `bson:"storageEngine,omitempty"`
+	Weights                 map[string]int `bson:"weights,omitempty"`
+	DefaultLanguage         string         `bson:"default_language,omitempty"`
+	LanguageOverride        string         `bson:"language_override,omitempty"`
+	TextIndexVersion        int            `bson:"textIndexVersion,omitempty"`
+	V2dsphereIndexVersion   int            `bson:"2dsphereIndexVersion,omitempty"`
+	Bits                    int            `bson:"bits,omitempty"`
+	Min                     int            `bson:"min,omitempty"`
+	Max                     int            `bson:"max,omitempty"`
+	BucketSize              float64        `bson:"bucketSize,omitempty"`
+	Collation               bson.M         `bson:"collation,omitempty"`
+	V                       int            `bson:"v,omitempty"`
+	NS                      string         `bson:"ns,omitempty"`
+}
+
+type listIndexesReply struct {
+	Cursor map[string][]*Index `bson:"cursor"`
+}
+
+//ListIndexes will return the collection index.
+func (c *Collection) ListIndexes() (indexes []*Index, err error) {
+	var client = c.Pool.Pop()
+	reply := &listIndexesReply{}
+	err = client.Execute(c.DbName,
+		bson.M{
+			"listIndexes": c.Name,
+		}, nil, reply)
+	if err == nil && reply.Cursor != nil {
+		indexes = reply.Cursor["firstBatch"]
+		for _, index := range indexes {
+			index.Key = ParseDoc(index.RawKey)
+		}
+	}
+	client.Close()
+	return
+}
+
+//CreateIndexes will create indexes on collection.
+func (c *Collection) CreateIndexes(indexes ...*Index) (err error) {
+	for _, index := range indexes {
+		index.RawKey = ParseSorted(index.Key...)
+	}
+	var client = c.Pool.Pop()
+	err = client.Execute(c.DbName,
+		bson.D{
+			{
+				Name:  "createIndexes",
+				Value: c.Name,
+			},
+			{
+				Name:  "indexes",
+				Value: indexes,
+			},
+		}, nil, &bson.M{})
+	client.Close()
+	return
+}
+
+//DropIndexes will drop index from collection, if name is *, drop all.
+func (c *Collection) DropIndexes(name string) (err error) {
+	var client = c.Pool.Pop()
+	err = client.Execute(c.DbName,
+		bson.D{
+			{
+				Name:  "dropIndexes",
+				Value: c.Name,
+			},
+			{
+				Name:  "index",
+				Value: name,
+			},
+		}, nil, &bson.M{})
+	client.Close()
+	return
+}
+
+//CheckIndex will craete index on collection if it is not exists.
+//if clear is true, will clear all index before create index.
+func (c *Collection) CheckIndex(clear bool, indexes ...*Index) (err error) {
+	mapHaving := map[string]*Index{}
+	if clear {
+		infoLog("pool will clear all index on collection(%v.%v)", c.DbName, c.Name)
+		err = c.DropIndexes("*")
+		if err != nil {
+			//the collection not exists error.
+			if berr, ok := (err.(*BSONError)); !(ok && berr.IsCollectionNotExist()) {
+				errorLog("pool drop all index on collection(%v.%v) fail with %v", c.DbName, c.Name, err)
+				return
+			}
+		}
+	} else {
+		var having []*Index
+		having, err = c.ListIndexes()
+		if err != nil {
+			//the collection not exists error.
+			if berr, ok := (err.(*BSONError)); !(ok && berr.IsCollectionNotExist()) {
+				errorLog("pool list all index on collection(%v.%v) fail with %v", c.DbName, c.Name, err)
+				return
+			}
+		} else {
+			for _, index := range having {
+				mapHaving[index.Name] = index
+			}
+		}
+	}
+	newList := []*Index{}
+	for _, index := range indexes {
+		if _, ok := mapHaving[index.Name]; ok {
+			continue
+		}
+		newList = append(newList, index)
+	}
+	if len(newList) < 1 {
+		return
+	}
+	infoLog("pool will create %v index on collection(%v.%v)", len(newList), c.DbName, c.Name)
+	err = c.CreateIndexes(newList...)
+	if err != nil {
+		errorLog("pool create index on collection(%v.%v) fail with %v", c.DbName, c.Name, err)
+	}
+	return
+}
+
+//NewBulk will create on bulk.
+//ordered:If the operations must be performed in order.
+func (c *Collection) NewBulk(ordered bool) *Bulk {
+	return &Bulk{
+		C:       c,
+		Ordered: ordered,
+	}
+}
+
+//BulkReply is bulk result.
+type BulkReply struct {
+	Opid     int
+	Inserted int           `bson:"nInserted"`
+	Modified int           `bson:"nModified"`
+	Matched  int           `bson:"nMatched"`
+	Removed  int           `bson:"nRemoved"`
+	Upserted int           `bson:"nUpserted"`
+	Errors   []interface{} `bson:"writeErrors"`
+}
+
+//Operator is one bluk operator.
+type Operator struct {
+	Type   string        //the operator type
+	Values []interface{} //the operator arguments.
+}
+
+//Bulk is wrapper of C.mongoc_bulk_t,
+//it provides an abstraction for submitting multiple write operations as a single batch.
+type Bulk struct {
+	Cmds    []*Operator
+	C       *Collection
+	Ordered bool
+}
+
+//Insert is wrapper of C.mongoc_bulk_operation_insert(),
+//it will insert multi document to database by adding multi insert bulk operator.
+func (b *Bulk) Insert(docs ...interface{}) {
+	for _, doc := range docs {
+		b.Cmds = append(b.Cmds, &Operator{
+			Type:   "insert",
+			Values: []interface{}{doc},
+		})
+	}
+}
+
+//Remove is wrapper of C.mongoc_bulk_operation_remove(),
+//it will remove multi document from database by selector.
+func (b *Bulk) Remove(selector interface{}) {
+	b.Cmds = append(b.Cmds, &Operator{
+		Type:   "remove",
+		Values: []interface{}{selector},
+	})
+}
+
+//RemoveOne is wrapper of C.mongoc_bulk_operation_remove_one(),
+//it will remove one document from database by selector.
+func (b *Bulk) RemoveOne(selector interface{}) {
+	b.Cmds = append(b.Cmds, &Operator{
+		Type:   "removeOne",
+		Values: []interface{}{selector},
+	})
+}
+
+//Replace is wrapper of C.mongoc_bulk_operation_replace(),
+//it will replace document from database by selector and new document.
+func (b *Bulk) Replace(selector, document interface{}, upsert bool) {
+	b.Cmds = append(b.Cmds, &Operator{
+		Type:   "replace",
+		Values: []interface{}{selector, document, upsert},
+	})
+}
+
+//Update is wrapper of C.mongoc_bulk_operation_update(),
+//it will update multi document from database by selector and update options.
+func (b *Bulk) Update(selector, document interface{}, upsert bool) {
+	b.Cmds = append(b.Cmds, &Operator{
+		Type:   "update",
+		Values: []interface{}{selector, document, upsert},
+	})
+}
+
+//UpdateOne is wrapper of C.mongoc_bulk_operation_update(),
+//it will update one document from database by selector and update options.
+func (b *Bulk) UpdateOne(selector, document interface{}, upsert bool) {
+	b.Cmds = append(b.Cmds, &Operator{
+		Type:   "updateOne",
+		Values: []interface{}{selector, document, upsert},
+	})
+}
+
+//Execute is wrapper of C.mongoc_bulk_operation_execute(),
+//it will commit all execute to database.
+func (b *Bulk) Execute() (reply *BulkReply, err error) {
+	var client = b.C.Pool.Pop()
+	var col = client.rawCollection(b.C.DbName, b.C.Name)
+	var rawBluk = C.mongoc_collection_create_bulk_operation(col.raw, C.bool(b.Ordered), nil)
+	defer func() {
+		client.Close()
+		C.mongoc_bulk_operation_destroy(rawBluk)
+	}()
+	for _, cmd := range b.Cmds {
+		switch cmd.Type {
+		case "insert":
+			rawDoc, terr := parseBSON(cmd.Values[0])
+			if terr != nil {
+				err = terr
+				return
+			}
+			C.mongoc_bulk_operation_insert(rawBluk, rawDoc)
+		case "remove":
+			rawSelector, terr := parseBSON(cmd.Values[0])
+			if terr != nil {
+				err = terr
+				return
+			}
+			C.mongoc_bulk_operation_remove(rawBluk, rawSelector)
+		case "removeOne":
+			rawSelector, terr := parseBSON(cmd.Values[0])
+			if terr != nil {
+				err = terr
+				return
+			}
+			C.mongoc_bulk_operation_remove_one(rawBluk, rawSelector)
+		case "replace":
+			rawSelector, terr := parseBSON(cmd.Values[0])
+			if terr != nil {
+				err = terr
+				return
+			}
+			rawDoc, terr := parseBSON(cmd.Values[1])
+			if terr != nil {
+				err = terr
+				return
+			}
+			upsert := (cmd.Values[2]).(bool)
+			C.mongoc_bulk_operation_replace_one(rawBluk, rawSelector, rawDoc, C.bool(upsert))
+		case "update":
+			rawSelector, terr := parseBSON(cmd.Values[0])
+			if terr != nil {
+				err = terr
+				return
+			}
+			rawDoc, terr := parseBSON(cmd.Values[1])
+			if terr != nil {
+				err = terr
+				return
+			}
+			upsert := (cmd.Values[2]).(bool)
+			C.mongoc_bulk_operation_update(rawBluk, rawSelector, rawDoc, C.bool(upsert))
+		case "updateOne":
+			rawSelector, terr := parseBSON(cmd.Values[0])
+			if terr != nil {
+				err = terr
+				return
+			}
+			rawDoc, terr := parseBSON(cmd.Values[1])
+			if terr != nil {
+				err = terr
+				return
+			}
+			upsert := (cmd.Values[2]).(bool)
+			C.mongoc_bulk_operation_update_one(rawBluk, rawSelector, rawDoc, C.bool(upsert))
+		}
+	}
+	var breply C.bson_t
+	var berr C.bson_error_t
+	var opid = int(C.mongoc_bulk_operation_execute(rawBluk, &breply, &berr))
+	if opid < 1 {
+		err = parseBSONError(&berr)
+		client.LastError = err
+	} else {
+		var str = C.bson_get_data(&breply)
+		mbys := C.GoBytes(unsafe.Pointer(str), C.int(breply.len))
+		reply = &BulkReply{}
+		err = bson.Unmarshal(mbys, reply)
+		reply.Opid = opid
+	}
+	C.bson_destroy(&breply)
 	return
 }

@@ -53,7 +53,7 @@ func ExamplePool() {
 		fmt.Println(users[0].Username, "found")
 		//
 		//update
-		err = col.Update(
+		changed, err := col.Update(
 			bson.M{
 				"username": "user2",
 				"password": "12345",
@@ -62,7 +62,7 @@ func ExamplePool() {
 					"password": "54321",
 				},
 			}, false, false)
-		if err != nil {
+		if err != nil || changed.Updated < 1 {
 			panic(err)
 		}
 		users = []*User{}
@@ -80,7 +80,7 @@ func ExamplePool() {
 		fmt.Println(users[0].Username, "found")
 		//
 		// remove
-		err = col.Remove(
+		_, err = col.Remove(
 			bson.M{
 				"username": "user2",
 				"password": "54321",
@@ -107,23 +107,14 @@ func ExamplePool() {
 	{
 		//create index xxx on test.mongoc.
 		//for more seed mongodb craeteIndexes command.
-		err := pool.Execute("test", bson.D{
-			{
-				Name:  "createIndexes",
-				Value: "mongoc",
-			},
-			{
-				Name: "indexes",
-				Value: []bson.M{
-					bson.M{
-						"name": "xxx",
-						"key": bson.M{
-							"xxx": 1,
-						},
-					},
+		err := pool.CheckIndex("test", map[string][]*mongoc.Index{
+			"mongoc": {
+				{
+					Name: "xxx",
+					Key:  []string{"xxx"},
 				},
 			},
-		}, nil, &bson.M{})
+		}, false)
 		if err != nil {
 			panic(err)
 		}
