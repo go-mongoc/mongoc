@@ -859,6 +859,7 @@ type updataReply struct {
 //Update document to database by upsert or manay
 func (c *Collection) Update(selector, update interface{}, upsert, many bool) (changed *Changed, err error) {
 	var client = c.Pool.Pop()
+	defer client.Close()
 	if selector == nil {
 		selector = map[string]interface{}{}
 	}
@@ -891,6 +892,16 @@ func (c *Collection) Update(selector, update interface{}, upsert, many bool) (ch
 //UpdateMany document to database
 func (c *Collection) UpdateMany(selector, update interface{}) (chnaged *Changed, err error) {
 	return c.Update(selector, update, false, true)
+}
+
+//UpdateOne document to database, return ErrNotFound when document not found
+func (c *Collection) UpdateOne(selector, update interface{}) (err error) {
+	var changed *Changed
+	changed, err = c.Update(selector, update, false, false)
+	if err == nil && changed.Matched < 1 {
+		err = ErrNotFound
+	}
+	return
 }
 
 //Remove document to database by single
