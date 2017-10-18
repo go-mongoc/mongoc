@@ -50,11 +50,13 @@ func TestMongoc(t *testing.T) {
 		t.Errorf("count fail %v err:%v", count, err)
 		return
 	}
-	bvals, err := col.Distinct("b", nil)
+	var bvals = []int{}
+	err = col.Distinct("b", nil, &bvals)
 	if err != nil || len(bvals) != 3 {
 		t.Errorf("count fail %v err:%v", len(bvals), err)
 		return
 	}
+	fmt.Println(bvals)
 	//find
 	//
 	var res = []map[string]interface{}{}

@@ -1237,8 +1237,13 @@ func (c *Collection) Stats(options, v interface{}) (err error) {
 	return
 }
 
+type distinctReply struct {
+	Values interface{} `bson:"values"`
+	Ok     int         `bson:"ok"`
+}
+
 //Distinct will call the distinct command to database.
-func (c *Collection) Distinct(key string, query interface{}) (vals []interface{}, err error) {
+func (c *Collection) Distinct(key string, query, v interface{}) (err error) {
 	var client = c.Pool.Pop()
 	var rawSelector *C.bson_t
 	defer func() {
@@ -1250,24 +1255,23 @@ func (c *Collection) Distinct(key string, query interface{}) (vals []interface{}
 	if query == nil {
 		query = map[string]interface{}{}
 	}
-	var reply = bson.M{}
-	err = client.Execute(c.DbName, bson.D{
-		{
-			Name:  "distinct",
-			Value: c.Name,
-		},
-		{
-			Name:  "key",
-			Value: key,
-		},
-		{
-			Name:  "query",
-			Value: query,
-		},
-	}, nil, &reply)
-	if err == nil {
-		vals = reply["values"].([]interface{})
-	}
+	err = client.Execute(c.DbName,
+		bson.D{
+			{
+				Name:  "distinct",
+				Value: c.Name,
+			},
+			{
+				Name:  "key",
+				Value: key,
+			},
+			{
+				Name:  "query",
+				Value: query,
+			},
+		}, nil, &distinctReply{
+			Values: v,
+		})
 	return
 }
 
