@@ -1274,7 +1274,8 @@ func (c *Collection) Distinct(key string, query interface{}) (vals []interface{}
 //Index is the struct to create the mongodb index.
 //for more https://docs.mongodb.com/manual/reference/command/createIndexes/
 type Index struct {
-	Key                     map[string]int `bson:"key"`
+	Key                     []string       `bson:"-"`
+	RawKey                  bson.D         `bson:"key"`
 	Name                    string         `bson:"name"`
 	Background              bool           `bson:"background,omitempty"`
 	Unique                  bool           `bson:"unique,omitempty"`
@@ -1310,6 +1311,9 @@ func (c *Collection) ListIndexes() (indexes []*Index, err error) {
 		}, nil, reply)
 	if err == nil && reply.Cursor != nil {
 		indexes = reply.Cursor["firstBatch"]
+		for _, index := range indexes {
+			index.Key = ParseDoc(index.RawKey)
+		}
 	}
 	client.Close()
 	return
@@ -1317,6 +1321,9 @@ func (c *Collection) ListIndexes() (indexes []*Index, err error) {
 
 //CreateIndexes will create indexes on collection.
 func (c *Collection) CreateIndexes(indexes ...*Index) (err error) {
+	for _, index := range indexes {
+		index.RawKey = ParseSorted(index.Key...)
+	}
 	var client = c.Pool.Pop()
 	err = client.Execute(c.DbName,
 		bson.D{

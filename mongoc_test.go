@@ -773,9 +773,7 @@ func TestServerErrCase(t *testing.T) {
 		err = col2.CheckIndex(true,
 			&Index{
 				Name: "xa",
-				Key: map[string]int{
-					"xa": 1,
-				},
+				Key:  []string{"xa"},
 			})
 		if err == nil {
 			t.Error(err)
@@ -784,15 +782,11 @@ func TestServerErrCase(t *testing.T) {
 		err = col2.CheckIndex(false,
 			&Index{
 				Name: "xa",
-				Key: map[string]int{
-					"xa": 1,
-				},
+				Key:  []string{"xa"},
 			},
 			&Index{
 				Name: "xb",
-				Key: map[string]int{
-					"xb": 1,
-				},
+				Key:  []string{"xb"},
 			})
 		if err == nil {
 			t.Error(err)
@@ -878,9 +872,7 @@ func TestIndexes(t *testing.T) {
 			"testindex": []*Index{
 				{
 					Name: "xa",
-					Key: map[string]int{
-						"xa": 1,
-					},
+					Key:  []string{"xa"},
 				},
 			},
 		}, true)
@@ -893,15 +885,11 @@ func TestIndexes(t *testing.T) {
 			"testindex": []*Index{
 				{
 					Name: "xa",
-					Key: map[string]int{
-						"xa": 1,
-					},
+					Key:  []string{"xa"},
 				},
 				{
 					Name: "xb",
-					Key: map[string]int{
-						"xb": 1,
-					},
+					Key:  []string{"-xb"},
 				},
 			},
 		}, false)
@@ -918,13 +906,22 @@ func TestIndexes(t *testing.T) {
 	for _, index := range indexes {
 		switch index.Name {
 		case "xa":
+			if len(index.Key) < 1 || index.Key[0] != "xa" {
+				t.Error("index error")
+				return
+			}
 			xa = true
 		case "xb":
+			if len(index.Key) < 1 || index.Key[0] != "-xb" {
+				t.Error("index error")
+				return
+			}
 			xb = true
 		}
 	}
 	if !(xa && xb) {
 		t.Error("error")
+		return
 	}
 	//
 	//test collection not exist
@@ -938,9 +935,7 @@ func TestIndexes(t *testing.T) {
 			"testindex": []*Index{
 				{
 					Name: "xa",
-					Key: map[string]int{
-						"xa": 1,
-					},
+					Key:  []string{"xa"},
 				},
 			},
 		}, true)
@@ -958,9 +953,7 @@ func TestIndexes(t *testing.T) {
 			"testindex": []*Index{
 				{
 					Name: "xa",
-					Key: map[string]int{
-						"xa": 1,
-					},
+					Key:  []string{"xa"},
 				},
 			},
 		}, false)
@@ -1112,9 +1105,7 @@ func TestCreateFind(t *testing.T) {
 		"mongoc": []*Index{
 			{
 				Name: "bench",
-				Key: map[string]int{
-					"bench": 1,
-				},
+				Key:  []string{"bench"},
 			},
 		},
 	}, true)
@@ -1134,9 +1125,7 @@ func BenchmarkMongoc(b *testing.B) {
 			"mongoc": []*Index{
 				{
 					Name: "bench",
-					Key: map[string]int{
-						"bench": 1,
-					},
+					Key:  []string{"bench"},
 				},
 			},
 		}, false)

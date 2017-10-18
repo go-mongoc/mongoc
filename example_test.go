@@ -111,9 +111,7 @@ func ExamplePool() {
 			"mongoc": {
 				{
 					Name: "xxx",
-					Key: map[string]int{
-						"xxx": 1,
-					},
+					Key:  []string{"xxx"},
 				},
 			},
 		}, false)
