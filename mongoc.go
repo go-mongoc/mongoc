@@ -17,6 +17,7 @@ void mongoc_cgo_init();
 */
 import "C"
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -829,67 +830,75 @@ func (c *Collection) Insert(docs ...interface{}) (err error) {
 	return
 }
 
+//Upserted is the update all return.
+type Upserted struct {
+	Index int         `bson:"index"`
+	ID    interface{} `bson:"_id"`
+}
+
+//WriteError is the command error.
+type WriteError struct {
+	Index   int    `bson:"index"`
+	Code    int    `bson:"code"`
+	Message string `bson:"errmsg"`
+}
+
+//WriteErrors is the WriteError slice.
+type WriteErrors []*WriteError
+
+func (w WriteErrors) Error() string {
+	bys, _ := json.Marshal(w)
+	return string(bys)
+}
+
+type updataReply struct {
+	Changed `bson:",inline"`
+	Errors  WriteErrors `bson:"writeErrors"`
+}
+
 //Update document to database by upsert or manay
-func (c *Collection) Update(selector, update interface{}, upsert, many bool) (err error) {
+func (c *Collection) Update(selector, update interface{}, upsert, many bool) (changed *Changed, err error) {
 	var client = c.Pool.Pop()
-	var col = client.rawCollection(c.DbName, c.Name)
-	var rawSelector, rawUpdate *C.bson_t
-	defer func() {
-		client.Close()
-		if rawSelector != nil {
-			C.bson_destroy(rawSelector)
-		}
-		if rawUpdate != nil {
-			C.bson_destroy(rawUpdate)
-		}
-	}()
 	if selector == nil {
 		selector = map[string]interface{}{}
 	}
-	rawSelector, err = parseBSON(selector)
-	if err != nil {
-		return
-	}
-	rawUpdate, err = parseBSON(update)
-	if err != nil {
-		return
-	}
-	var flags = C.MONGOC_UPDATE_NONE
-	if upsert {
-		flags = flags | C.MONGOC_UPDATE_UPSERT
-	}
-	if many {
-		flags = flags | C.MONGOC_UPDATE_MULTI_UPDATE
-	}
-	var berr C.bson_error_t
-	if !C.mongoc_collection_update(col.raw, C.mongoc_update_flags_t(flags), rawSelector, rawUpdate, nil, &berr) {
-		err = parseBSONError(&berr)
-		client.LastError = err
+	reply := &updataReply{}
+	reply.Changed.Upserted = []*Upserted{}
+	changed = &reply.Changed
+	err = client.Execute(c.DbName, bson.D{
+		{
+			Name:  "update",
+			Value: c.Name,
+		},
+		{
+			Name: "updates",
+			Value: []bson.M{
+				{
+					"q":      selector,
+					"u":      update,
+					"upsert": upsert,
+					"multi":  many,
+				},
+			},
+		},
+	}, nil, reply)
+	if err == nil && len(reply.Errors) > 0 {
+		err = reply.Errors
 	}
 	return
 }
 
 //UpdateMany document to database
-func (c *Collection) UpdateMany(selector, update interface{}) (err error) {
+func (c *Collection) UpdateMany(selector, update interface{}) (chnaged *Changed, err error) {
 	return c.Update(selector, update, false, true)
 }
 
 //Remove document to database by single
 func (c *Collection) Remove(selector interface{}, single bool) (n int, err error) {
 	var client = c.Pool.Pop()
-	var rawSelector *C.bson_t
-	defer func() {
-		client.Close()
-		if rawSelector != nil {
-			C.bson_destroy(rawSelector)
-		}
-	}()
+	defer client.Close()
 	if selector == nil {
 		selector = map[string]interface{}{}
-	}
-	rawSelector, err = parseBSON(selector)
-	if err != nil {
-		return
 	}
 	var delete = bson.M{
 		"q": selector,
@@ -925,82 +934,80 @@ func (c *Collection) RemoveAll(selector interface{}) (n int, err error) {
 
 //Changed is the findAndModify reply info.
 type Changed struct {
-	Upserted interface{} `bson:"upserted"`        //the upsert id
-	Matched  bool        `bson:"updatedExisting"` //whether mathced doc updated
-	Updated  int         `bson:"n"`               //row updated.
+	Upserted interface{} `bson:"upserted"`  //the upsert id
+	Matched  int         `bson:"n"`         //row matched
+	Updated  int         `bson:"nModified"` //row updated.
+}
+
+type lastErrorObject struct {
+	Upserted        interface{} `bson:"upserted"`
+	UpdatedExisting bool        `bson:"updatedExisting"`
+	N               int         `bson:"n"`
+	Err             string      `bson:"err"`
+	OK              int         `bson:"ok"`
 }
 
 type findAndModifyReply struct {
-	Changed *Changed    `bson:"lastErrorObject"`
-	Value   interface{} `bson:"value"`
-	Ok      int         `bson:"ok"`
+	Value interface{}     `bson:"value"`
+	Ok    int             `bson:"ok"`
+	Error lastErrorObject `bson:"lastErrorObject"`
 }
 
 //FindAndModifyWithFlags will find and modify document on database.
-func (c *Collection) FindAndModifyWithFlags(query, update, fields interface{}, remove, upsert, retnew bool, v interface{}) (chnaged *Changed, err error) {
+func (c *Collection) FindAndModifyWithFlags(query, update, fields interface{}, remove, upsert, retnew bool, v interface{}) (changed *Changed, err error) {
 	var client = c.Pool.Pop()
-	var col = client.rawCollection(c.DbName, c.Name)
-	var rawQuery, rawSort, rawUpdate, rawFields *C.bson_t
-	defer func() {
-		client.Close()
-		if rawQuery != nil {
-			C.bson_destroy(rawQuery)
-		}
-		// if rawSort != nil {
-		// 	C.bson_destroy(rawSort)
-		// }
-		if rawUpdate != nil {
-			C.bson_destroy(rawUpdate)
-		}
-		if rawFields != nil {
-			C.bson_destroy(rawFields)
-		}
-	}()
+	defer client.Close()
 	if query == nil {
 		query = map[string]interface{}{}
-	}
-	rawQuery, err = parseBSON(query)
-	if err != nil {
-		return
-	}
-	// if sort != nil {
-	// 	rawSort, err = parseBSON(sort)
-	// 	if err != nil {
-	// 		return
-	// 	}
-	// }
-	rawUpdate, err = parseBSON(update)
-	if err != nil {
-		return
 	}
 	if fields == nil {
 		fields = map[string]interface{}{}
 	}
-	rawFields, err = parseBSON(fields)
-	if err != nil {
-		return
+	changed = &Changed{}
+	var reply = findAndModifyReply{
+		Value: v,
 	}
-	chnaged = &Changed{}
-	var berr C.bson_error_t
-	var doc C.bson_t
-	if C.mongoc_collection_find_and_modify(col.raw, rawQuery, rawSort, rawUpdate, rawFields,
-		C.bool(remove), C.bool(upsert), C.bool(retnew), &doc, &berr) {
-		var str = C.bson_get_data(&doc)
-		mbys := C.GoBytes(unsafe.Pointer(str), C.int(doc.len))
-		reply := &findAndModifyReply{}
-		err = bson.Unmarshal(mbys, reply)
-		if err == nil {
-			chnaged = reply.Changed
-			if reply.Value != nil && v != nil {
-				subBys, _ := bson.Marshal(reply.Value)
-				err = bson.Unmarshal(subBys, v)
-			}
+	err = client.Execute(c.DbName, bson.D{
+		{
+			Name:  "findAndModify",
+			Value: c.Name,
+		},
+		{
+			Name:  "query",
+			Value: query,
+		},
+		{
+			Name:  "update",
+			Value: update,
+		},
+		{
+			Name:  "fields",
+			Value: fields,
+		},
+		{
+			Name:  "remove",
+			Value: remove,
+		},
+		{
+			Name:  "upsert",
+			Value: upsert,
+		},
+		{
+			Name:  "new",
+			Value: retnew,
+		},
+	}, nil, &reply)
+	if err == nil {
+		if reply.Ok < 1 {
+			err = fmt.Errorf("%v", reply.Error.Err)
+			return
 		}
-	} else {
-		err = parseBSONError(&berr)
-		client.LastError = err
+		changed.Updated = reply.Error.N
+		if reply.Error.UpdatedExisting {
+			changed.Matched = 1
+		}
+		changed.Upserted = reply.Error.Upserted
 	}
-	C.bson_destroy(&doc)
 	return
 }
 
@@ -1245,13 +1252,7 @@ type distinctReply struct {
 //Distinct will call the distinct command to database.
 func (c *Collection) Distinct(key string, query, v interface{}) (err error) {
 	var client = c.Pool.Pop()
-	var rawSelector *C.bson_t
-	defer func() {
-		client.Close()
-		if rawSelector != nil {
-			C.bson_destroy(rawSelector)
-		}
-	}()
+	defer client.Close()
 	if query == nil {
 		query = map[string]interface{}{}
 	}

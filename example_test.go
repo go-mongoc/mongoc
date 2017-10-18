@@ -53,7 +53,7 @@ func ExamplePool() {
 		fmt.Println(users[0].Username, "found")
 		//
 		//update
-		err = col.Update(
+		changed, err := col.Update(
 			bson.M{
 				"username": "user2",
 				"password": "12345",
@@ -62,7 +62,7 @@ func ExamplePool() {
 					"password": "54321",
 				},
 			}, false, false)
-		if err != nil {
+		if err != nil || changed.Updated < 1 {
 			panic(err)
 		}
 		users = []*User{}

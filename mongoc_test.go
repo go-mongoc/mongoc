@@ -107,14 +107,14 @@ func TestMongoc(t *testing.T) {
 	}
 	//update
 	//
-	err = col.UpdateMany(bson.M{
+	changed, err := col.UpdateMany(bson.M{
 		"b": 1,
 	}, bson.M{
 		"$set": bson.M{
 			"b": 100,
 		},
 	})
-	if err != nil {
+	if err != nil || changed.Updated < 1 {
 		t.Error(err)
 		return
 	}
@@ -128,7 +128,7 @@ func TestMongoc(t *testing.T) {
 	//find and modify
 	//
 	one = map[string]interface{}{}
-	changed, err := col.FindAndModify(
+	changed, err = col.FindAndModify(
 		bson.M{
 			"b": 2,
 		},
@@ -144,7 +144,7 @@ func TestMongoc(t *testing.T) {
 		t.Error(err)
 		return
 	}
-	if !changed.Matched || changed.Updated != 1 {
+	if changed.Matched != 1 || changed.Updated != 1 {
 		t.Errorf("%v", changed)
 		return
 	}
@@ -167,7 +167,7 @@ func TestMongoc(t *testing.T) {
 		t.Error(err)
 		return
 	}
-	if changed.Matched || changed.Updated != 0 {
+	if changed.Matched > 0 || changed.Updated != 0 {
 		t.Errorf("%v", changed)
 		return
 	}
@@ -187,8 +187,8 @@ func TestMongoc(t *testing.T) {
 		t.Error(err)
 		return
 	}
-	if changed.Matched || changed.Updated != 1 {
-		t.Errorf("%v", changed)
+	if changed.Matched > 0 || changed.Updated != 1 {
+		t.Errorf("%v-%v-%v", changed.Matched, changed.Updated, changed)
 		return
 	}
 	fmt.Println(one)
@@ -544,6 +544,8 @@ func TestErrCase(t *testing.T) {
 	{
 		pool := NewPool("mongodb://loc.m:27017", 100, 10)
 		col := pool.C("test", "mongoc")
+		col.RemoveAll(nil)
+
 		_, err := col.Remove(TestErrCase, false)
 		if err == nil {
 			t.Error("not error")
@@ -587,12 +589,12 @@ func TestErrCase(t *testing.T) {
 			return
 		}
 		//
-		err = col.Update(nil, TestErrCase, true, true)
+		_, err = col.Update(nil, TestErrCase, true, true)
 		if err == nil {
 			t.Error("not error")
 			return
 		}
-		err = col.Update(TestErrCase, nil, true, true)
+		_, err = col.Update(TestErrCase, nil, true, true)
 		if err == nil {
 			t.Error("not error")
 			return
@@ -615,11 +617,6 @@ func TestErrCase(t *testing.T) {
 			return
 		}
 		_, err = col.FindAndModify(nil, bson.M{"c": 100}, TestErrCase, true, true, nil)
-		if err == nil {
-			t.Error("not error")
-			return
-		}
-		_, err = col.FindAndModify(nil, nil, nil, true, true, nil)
 		if err == nil {
 			t.Error("not error")
 			return
@@ -731,7 +728,7 @@ func TestServerErrCase(t *testing.T) {
 			return
 		}
 		//
-		err = col.Update(nil, bson.M{"c": 100}, true, true)
+		_, err = col.Update(nil, bson.M{"c": 100}, true, true)
 		if err == nil {
 			t.Error("not error")
 			return
