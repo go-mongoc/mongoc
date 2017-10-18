@@ -111,17 +111,36 @@ func TestMongoc(t *testing.T) {
 		"b": 1,
 	}, bson.M{
 		"$set": bson.M{
+			"b": 101,
+		},
+	})
+	if err != nil || changed.Updated != 3 {
+		t.Error(err)
+		return
+	}
+	count, err = col.Count(bson.M{
+		"b": 101,
+	}, 0, 0)
+	if err != nil || count != 3 {
+		t.Errorf("count fail %v err:%v", count, err)
+		return
+	}
+	//
+	err = col.UpdateOne(bson.M{
+		"b": 101,
+	}, bson.M{
+		"$set": bson.M{
 			"b": 100,
 		},
 	})
-	if err != nil || changed.Updated < 1 {
+	if err != nil {
 		t.Error(err)
 		return
 	}
 	count, err = col.Count(bson.M{
 		"b": 100,
 	}, 0, 0)
-	if err != nil || count != 3 {
+	if err != nil || count != 1 {
 		t.Errorf("count fail %v err:%v", count, err)
 		return
 	}
@@ -589,6 +608,11 @@ func TestErrCase(t *testing.T) {
 			return
 		}
 		//
+		err = col.UpdateOne(bson.M{"xx": "not found"}, bson.M{"xx": 1})
+		if err != ErrNotFound {
+			t.Error("not error")
+			return
+		}
 		_, err = col.Update(nil, TestErrCase, true, true)
 		if err == nil {
 			t.Error("not error")
