@@ -1189,10 +1189,13 @@ func runBulkUpsert(col *Collection, rid int64, count int) (err error) {
 }
 
 func runBulkInsertUpdate(col *Collection, rid int64, count int) (err error) {
-	bulk := col.NewBulk(false)
+	bulk := col.NewBulk(true)
 	for i := 0; i < count; i++ {
-		var id = bson.NewObjectId().Hex()
+		var id = fmt.Sprintf("%v-%v", rid, i)
 		bulk.Insert(bson.M{"_id": id})
+	}
+	for i := 0; i < count; i++ {
+		var id = fmt.Sprintf("%v-%v", rid, i)
 		bulk.Update(bson.M{"_id": id}, bson.M{"$set": bson.M{"value": 1}}, false)
 	}
 	reply, err := bulk.Execute()
@@ -1236,7 +1239,7 @@ func TestBulkUpsert(t *testing.T) {
 	fmt.Printf("100 doc used:%v\n", timestamp()-beg)
 	//
 	beg = timestamp()
-	err = runBulkUpsert(col, 0, 1000)
+	err = runBulkUpsert(col, 1, 1000)
 	if err != nil {
 		t.Error(err)
 		return
@@ -1244,7 +1247,7 @@ func TestBulkUpsert(t *testing.T) {
 	fmt.Printf("1000 doc used:%v\n", timestamp()-beg)
 	//
 	beg = timestamp()
-	err = runBulkUpsert(col, 0, 3000)
+	err = runBulkUpsert(col, 2, 3000)
 	if err != nil {
 		t.Error(err)
 		return
@@ -1252,7 +1255,7 @@ func TestBulkUpsert(t *testing.T) {
 	fmt.Printf("3000 doc used:%v\n", timestamp()-beg)
 	//
 	beg = timestamp()
-	err = runBulkUpsert(col, 0, 5000)
+	err = runBulkUpsert(col, 3, 5000)
 	if err != nil {
 		t.Error(err)
 		return
@@ -1263,7 +1266,7 @@ func TestBulkUpsert(t *testing.T) {
 func TestBulkInsertUpdate(t *testing.T) {
 	InitShared("loc.m:27017", "test")
 	col := SharedC("mongoc")
-	col.Remove(nil, false)
+	col.RemoveAll(nil)
 	err := SharedCheckIndex(
 		map[string][]*Index{
 			"mongoc": []*Index{
@@ -1287,7 +1290,7 @@ func TestBulkInsertUpdate(t *testing.T) {
 	fmt.Printf("100 doc used:%v\n", timestamp()-beg)
 	//
 	beg = timestamp()
-	err = runBulkInsertUpdate(col, 0, 1000)
+	err = runBulkInsertUpdate(col, 1, 1000)
 	if err != nil {
 		t.Error(err)
 		return
@@ -1295,7 +1298,7 @@ func TestBulkInsertUpdate(t *testing.T) {
 	fmt.Printf("1000 doc used:%v\n", timestamp()-beg)
 	//
 	beg = timestamp()
-	err = runBulkInsertUpdate(col, 0, 3000)
+	err = runBulkInsertUpdate(col, 2, 3000)
 	if err != nil {
 		t.Error(err)
 		return
@@ -1303,7 +1306,7 @@ func TestBulkInsertUpdate(t *testing.T) {
 	fmt.Printf("3000 doc used:%v\n", timestamp()-beg)
 	//
 	beg = timestamp()
-	err = runBulkInsertUpdate(col, 0, 5000)
+	err = runBulkInsertUpdate(col, 3, 5000)
 	if err != nil {
 		t.Error(err)
 		return
