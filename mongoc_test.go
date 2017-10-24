@@ -1188,6 +1188,23 @@ func runBulkUpsert(col *Collection, rid int64, count int) (err error) {
 	return
 }
 
+func runBulkInsertUpdate(col *Collection, rid int64, count int) (err error) {
+	bulk := col.NewBulk(false)
+	for i := 0; i < count; i++ {
+		var id = bson.NewObjectId().Hex()
+		bulk.Insert(bson.M{"_id": id})
+		bulk.Update(bson.M{"_id": id}, bson.M{"$set": bson.M{"value": 1}}, false)
+	}
+	reply, err := bulk.Execute()
+	if err != nil {
+		return
+	}
+	if len(reply.Errors) > 0 {
+		err = fmt.Errorf("having errors->%v", reply.Errors)
+	}
+	return
+}
+
 func timestamp() int64 {
 	return time.Now().Local().UnixNano() / 1e6
 }
@@ -1236,6 +1253,57 @@ func TestBulkUpsert(t *testing.T) {
 	//
 	beg = timestamp()
 	err = runBulkUpsert(col, 0, 5000)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Printf("5000 doc used:%v\n", timestamp()-beg)
+}
+
+func TestBulkInsertUpdate(t *testing.T) {
+	InitShared("loc.m:27017", "test")
+	col := SharedC("mongoc")
+	col.Remove(nil, false)
+	err := SharedCheckIndex(
+		map[string][]*Index{
+			"mongoc": []*Index{
+				{
+					Name: "upsert",
+					Key:  []string{"upsert"},
+				},
+			},
+		}, false)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	//
+	beg := timestamp()
+	err = runBulkInsertUpdate(col, 0, 100)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Printf("100 doc used:%v\n", timestamp()-beg)
+	//
+	beg = timestamp()
+	err = runBulkInsertUpdate(col, 0, 1000)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Printf("1000 doc used:%v\n", timestamp()-beg)
+	//
+	beg = timestamp()
+	err = runBulkInsertUpdate(col, 0, 3000)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Printf("3000 doc used:%v\n", timestamp()-beg)
+	//
+	beg = timestamp()
+	err = runBulkInsertUpdate(col, 0, 5000)
 	if err != nil {
 		t.Error(err)
 		return
