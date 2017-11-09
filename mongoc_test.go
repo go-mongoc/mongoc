@@ -858,30 +858,6 @@ func TestLog(t *testing.T) {
 	LogHandler(1000, "testing", "7")
 }
 
-func runCreateFind(col *Collection, rid int64) {
-	err := col.Insert(map[string]interface{}{
-		"bench":   rid,
-		"testing": "testing",
-	})
-	if err != nil {
-		panic(err)
-	}
-	res := []map[string]interface{}{}
-	err = col.Find(bson.M{
-		"bench":   rid,
-		"testing": "testing",
-	}, nil, 0, 1, &res)
-	if err != nil {
-		panic(err)
-	}
-	if len(res) < 1 {
-		panic("not found")
-	}
-	if res[0]["bench"].(int64) != rid {
-		panic("data error")
-	}
-}
-
 func TestIndexes(t *testing.T) {
 	InitShared("loc.m:27017", "test")
 	col := SharedC("testindex")
@@ -1120,6 +1096,30 @@ func TestBulk(t *testing.T) {
 	}
 }
 
+func runCreateFind(col *Collection, rid int64) {
+	err := col.Insert(map[string]interface{}{
+		"bench":   rid,
+		"testing": "testing",
+	})
+	if err != nil {
+		panic(err)
+	}
+	res := []map[string]interface{}{}
+	err = col.Find(bson.M{
+		"bench":   rid,
+		"testing": "testing",
+	}, nil, 0, 1, &res)
+	if err != nil {
+		panic(err)
+	}
+	if len(res) < 1 {
+		panic("not found")
+	}
+	if res[0]["bench"].(int64) != rid {
+		panic("data error")
+	}
+}
+
 func TestCreateFind(t *testing.T) {
 	pool := NewPool("mongodb://loc.m:27017", 100, 1)
 	col := pool.C("test", "mongoc")
@@ -1161,6 +1161,186 @@ func BenchmarkMongoc(b *testing.B) {
 		for pb.Next() {
 			rid := atomic.AddInt64(&ridx, 1)
 			runCreateFind(col, rid)
+		}
+	})
+}
+
+func runBulkUpsert(col *Collection, rid int64, count int) (err error) {
+	bulk := col.NewBulk(false)
+	for i := 0; i < count; i++ {
+		key := fmt.Sprintf("%v-%v", rid, i)
+		bulk.Update(
+			bson.M{
+				"upsert": key,
+			}, bson.M{
+				"$set": bson.M{
+					"time": 100,
+				},
+			}, true)
+	}
+	reply, err := bulk.Execute()
+	if err != nil {
+		return
+	}
+	if len(reply.Errors) > 0 {
+		err = fmt.Errorf("having errors->%v", reply.Errors)
+	}
+	return
+}
+
+func runBulkInsertUpdate(col *Collection, rid int64, count int) (err error) {
+	bulk := col.NewBulk(true)
+	for i := 0; i < count; i++ {
+		var id = fmt.Sprintf("%v-%v", rid, i)
+		bulk.Insert(bson.M{"_id": id})
+	}
+	for i := 0; i < count; i++ {
+		var id = fmt.Sprintf("%v-%v", rid, i)
+		bulk.Update(bson.M{"_id": id}, bson.M{"$set": bson.M{"value": 1}}, false)
+	}
+	reply, err := bulk.Execute()
+	if err != nil {
+		return
+	}
+	if len(reply.Errors) > 0 {
+		err = fmt.Errorf("having errors->%v", reply.Errors)
+	}
+	return
+}
+
+func timestamp() int64 {
+	return time.Now().Local().UnixNano() / 1e6
+}
+
+func TestBulkUpsert(t *testing.T) {
+	InitShared("loc.m:27017", "test")
+	col := SharedC("mongoc")
+	col.Remove(nil, false)
+	err := SharedCheckIndex(
+		map[string][]*Index{
+			"mongoc": []*Index{
+				{
+					Name: "upsert",
+					Key:  []string{"upsert"},
+				},
+			},
+		}, false)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	//
+	beg := timestamp()
+	err = runBulkUpsert(col, 0, 100)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Printf("100 doc used:%v\n", timestamp()-beg)
+	//
+	beg = timestamp()
+	err = runBulkUpsert(col, 1, 1000)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Printf("1000 doc used:%v\n", timestamp()-beg)
+	//
+	beg = timestamp()
+	err = runBulkUpsert(col, 2, 3000)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Printf("3000 doc used:%v\n", timestamp()-beg)
+	//
+	beg = timestamp()
+	err = runBulkUpsert(col, 3, 5000)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Printf("5000 doc used:%v\n", timestamp()-beg)
+}
+
+func TestBulkInsertUpdate(t *testing.T) {
+	InitShared("loc.m:27017", "test")
+	col := SharedC("mongoc")
+	col.RemoveAll(nil)
+	err := SharedCheckIndex(
+		map[string][]*Index{
+			"mongoc": []*Index{
+				{
+					Name: "upsert",
+					Key:  []string{"upsert"},
+				},
+			},
+		}, false)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	//
+	beg := timestamp()
+	err = runBulkInsertUpdate(col, 0, 100)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Printf("100 doc used:%v\n", timestamp()-beg)
+	//
+	beg = timestamp()
+	err = runBulkInsertUpdate(col, 1, 1000)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Printf("1000 doc used:%v\n", timestamp()-beg)
+	//
+	beg = timestamp()
+	err = runBulkInsertUpdate(col, 2, 3000)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Printf("3000 doc used:%v\n", timestamp()-beg)
+	//
+	beg = timestamp()
+	err = runBulkInsertUpdate(col, 3, 5000)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	fmt.Printf("5000 doc used:%v\n", timestamp()-beg)
+}
+
+func BenchmarkBulkUpsert(b *testing.B) {
+	InitShared("loc.m:27017", "test")
+	col := SharedC("mongoc")
+	col.Remove(nil, false)
+	err := SharedCheckIndex(
+		map[string][]*Index{
+			"mongoc": []*Index{
+				{
+					Name: "upsert",
+					Key:  []string{"upsert"},
+				},
+			},
+		}, false)
+	if err != nil {
+		b.Error(err)
+		return
+	}
+	err = runBulkUpsert(col, 0, 10) //for client connected.
+	if err != nil {
+		b.Error(err)
+		return
+	}
+	ridx := int64(0)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			rid := atomic.AddInt64(&ridx, 1)
+			runBulkUpsert(col, rid, 10)
 		}
 	})
 }
