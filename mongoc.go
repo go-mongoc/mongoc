@@ -13,6 +13,8 @@ package mongoc
 #cgo darwin LDFLAGS: -L/usr/local/lib -lmongoc-1.0 -lbson-1.0
 #cgo linux CFLAGS: -I/usr/local/include/libmongoc-1.0/ -I/usr/local/include/libbson-1.0/ -Wno-deprecated-declarations
 #cgo linux LDFLAGS: -L/usr/local/lib -lmongoc-1.0 -lbson-1.0
+#cgo windows CFLAGS: -IC:/mongo-c-driver/include/libmongoc-1.0/ -IC:/mongo-c-driver/include/libbson-1.0/ -Wno-deprecated-declarations
+#cgo windows LDFLAGS: -LC:/mongo-c-driver/lib -lmongoc-1.0 -lbson-1.0
 void mongoc_cgo_init();
 */
 import "C"

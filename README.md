@@ -10,6 +10,7 @@ mongoc is golang binding for libmongoc.
 
 ## Install
 
+### Linux/Unix/OSx
 * download libmongoc from [http://mongoc.org/]
 * install libmongoc to /usr/local/ by 
 
@@ -25,7 +26,49 @@ make install
 go get gopkg.in/mongoc.v1
 ```
 
-note: for window, compile manual and export CGO_CFLAGS/CGO_LDFLAGS then get package.
+### Windows
+* download mingw64 and install to C:\mingw64
+* get source from github
+
+```
+cd D:\mongoc
+git clone https://github.com/mongodb/mongo-c-driver
+git submodule update --init
+```
+
+* update the compile script ~/mongo-c-driver/.compile-windows-mingw.bat to blew
+
+```.bat
+rem Ensure Cygwin executables like sh.exe are not in PATH
+set PATH=C:\Windows\system32;C:\Windows;C:\mingw64\bin;C:\mongoc;src\libbson;
+
+echo CONFIGURE_FLAGS %CONFIGURE_FLAGS%
+
+set CMAKE=C:\cmake\bin\cmake
+set CMAKE_MAKE_PROGRAM=C:\mingw64\bin\mingw32-make.exe
+set CC=C:\mingw64\bin\gcc.exe
+
+cd src\libbson
+%CMAKE% -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=%CMAKE_MAKE_PROGRAM% -DCMAKE_INSTALL_PREFIX=C:\mongo-c-driver %CONFIGURE_FLAGS%
+
+%CMAKE_MAKE_PROGRAM% -j5
+%CMAKE_MAKE_PROGRAM% install
+
+cd ..\..
+%CMAKE% -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=%CMAKE_MAKE_PROGRAM% -DCMAKE_INSTALL_PREFIX=C:\mongo-c-driver %CONFIGURE_FLAGS%
+
+%CMAKE_MAKE_PROGRAM% -j5
+%CMAKE_MAKE_PROGRAM% install
+```
+
+note: change the mingw64/install path.
+
+* install golang package
+```
+go get gopkg.in/mongoc.v1
+```
+
+note: export CGO_CFLAGS/CGO_LDFLAGS when the lib location is not C:\mongo-c-driver.
 
 
 ## Example
