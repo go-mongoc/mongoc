@@ -36,7 +36,8 @@ git clone https://github.com/mongodb/mongo-c-driver
 git submodule update --init
 ```
 
-* update the compile script ~/mongo-c-driver/.compile-windows-mingw.bat to blew
+* update the compile script xx\mongo-c-driver\.evergreen\compile-windows-mingw.bat to below
+note: only change the mingw64/install path.
 
 ```.bat
 rem Ensure Cygwin executables like sh.exe are not in PATH
@@ -49,19 +50,24 @@ set CMAKE_MAKE_PROGRAM=C:\mingw64\bin\mingw32-make.exe
 set CC=C:\mingw64\bin\gcc.exe
 
 cd src\libbson
-%CMAKE% -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=%CMAKE_MAKE_PROGRAM% -DCMAKE_INSTALL_PREFIX=C:\mongo-c-driver %CONFIGURE_FLAGS%
+%CMAKE% -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=%CMAKE_MAKE_PROGRAM% -DCMAKE_INSTALL_PREFIX=C:\mongo-c-driver -DCMAKE_PREFIX_PATH=C:\mongo-c-driver %CONFIGURE_FLAGS%
 
 %CMAKE_MAKE_PROGRAM% -j5
 %CMAKE_MAKE_PROGRAM% install
 
 cd ..\..
-%CMAKE% -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=%CMAKE_MAKE_PROGRAM% -DCMAKE_INSTALL_PREFIX=C:\mongo-c-driver %CONFIGURE_FLAGS%
+%CMAKE% -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=%CMAKE_MAKE_PROGRAM% -DCMAKE_INSTALL_PREFIX=C:\mongo-c-driver -DCMAKE_PREFIX_PATH=C:\mongo-c-driver %CONFIGURE_FLAGS%
 
 %CMAKE_MAKE_PROGRAM% -j5
 %CMAKE_MAKE_PROGRAM% install
 ```
 
-note: change the mingw64/install path.
+* build the library
+
+```
+cd ~/mongo-c-driver/
+.evergreen\compile-windows-mingw.bat
+```
 
 * install golang package
 ```
