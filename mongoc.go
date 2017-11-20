@@ -967,7 +967,7 @@ type findAndModifyReply struct {
 }
 
 //FindAndModifyWithFlags will find and modify document on database.
-func (c *Collection) FindAndModifyWithFlags(query, update, fields interface{}, remove, upsert, retnew bool, v interface{}) (changed *Changed, err error) {
+func (c *Collection) FindAndModifyWithFlags(query, orderby, update, fields interface{}, remove, upsert, retnew bool, v interface{}) (changed *Changed, err error) {
 	var client = c.Pool.Pop()
 	defer client.Close()
 	if query == nil {
@@ -988,6 +988,10 @@ func (c *Collection) FindAndModifyWithFlags(query, update, fields interface{}, r
 		{
 			Name:  "query",
 			Value: query,
+		},
+		{
+			Name:  "orderby",
+			Value: orderby,
 		},
 		{
 			Name:  "update",
@@ -1025,13 +1029,13 @@ func (c *Collection) FindAndModifyWithFlags(query, update, fields interface{}, r
 }
 
 //FindAndModify document on database.
-func (c *Collection) FindAndModify(query, update, fields interface{}, upsert, retnew bool, v interface{}) (chnaged *Changed, err error) {
-	return c.FindAndModifyWithFlags(query, update, fields, false, upsert, retnew, v)
+func (c *Collection) FindAndModify(query, orderby, update, fields interface{}, upsert, retnew bool, v interface{}) (chnaged *Changed, err error) {
+	return c.FindAndModifyWithFlags(query, orderby, update, fields, false, upsert, retnew, v)
 }
 
 //Upsert will update or insert document to database.
 func (c *Collection) Upsert(query, update interface{}) (changed *Changed, err error) {
-	return c.FindAndModifyWithFlags(query, update, nil, false, true, true, nil)
+	return c.FindAndModifyWithFlags(query, nil, update, nil, false, true, true, nil)
 }
 
 //FindWithFlags the document by flags.
