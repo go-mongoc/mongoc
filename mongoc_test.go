@@ -151,6 +151,7 @@ func TestMongoc(t *testing.T) {
 		bson.M{
 			"b": 2,
 		},
+		nil,
 		bson.M{
 			"$set": bson.M{
 				"b": 300,
@@ -174,6 +175,7 @@ func TestMongoc(t *testing.T) {
 		bson.M{
 			"b": 122,
 		},
+		nil,
 		bson.M{
 			"$set": bson.M{
 				"b": 300,
@@ -630,17 +632,17 @@ func TestErrCase(t *testing.T) {
 			return
 		}
 		//
-		_, err = col.FindAndModify(TestErrCase, bson.M{"c": 100}, nil, true, true, nil)
+		_, err = col.FindAndModify(TestErrCase, nil, bson.M{"c": 100}, nil, true, true, nil)
 		if err == nil {
 			t.Error("not error")
 			return
 		}
-		_, err = col.FindAndModify(nil, TestErrCase, nil, true, true, nil)
+		_, err = col.FindAndModify(nil, nil, TestErrCase, nil, true, true, nil)
 		if err == nil {
 			t.Error("not error")
 			return
 		}
-		_, err = col.FindAndModify(nil, bson.M{"c": 100}, TestErrCase, true, true, nil)
+		_, err = col.FindAndModify(nil, nil, bson.M{"c": 100}, TestErrCase, true, true, nil)
 		if err == nil {
 			t.Error("not error")
 			return
@@ -758,7 +760,7 @@ func TestServerErrCase(t *testing.T) {
 			return
 		}
 		//
-		_, err = col.FindAndModify(nil, bson.M{"c": 100}, nil, true, true, nil)
+		_, err = col.FindAndModify(nil, nil, bson.M{"c": 100}, nil, true, true, nil)
 		if err == nil {
 			t.Error("not error")
 			return
