@@ -967,7 +967,7 @@ type findAndModifyReply struct {
 }
 
 //FindAndModifyWithFlags will find and modify document on database.
-func (c *Collection) FindAndModifyWithFlags(query, orderby, update, fields interface{}, remove, upsert, retnew bool, v interface{}) (changed *Changed, err error) {
+func (c *Collection) FindAndModifyWithFlags(query, sort, update, fields interface{}, remove, upsert, retnew bool, v interface{}) (changed *Changed, err error) {
 	var client = c.Pool.Pop()
 	defer client.Close()
 	if query == nil {
@@ -990,8 +990,8 @@ func (c *Collection) FindAndModifyWithFlags(query, orderby, update, fields inter
 			Value: query,
 		},
 		{
-			Name:  "orderby",
-			Value: orderby,
+			Name:  "sort",
+			Value: sort,
 		},
 		{
 			Name:  "update",
