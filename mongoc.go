@@ -24,6 +24,7 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -616,6 +617,7 @@ func newClient(uri string) (client *Client, err error) {
 	defer C.free(unsafe.Pointer(curistr))
 	raw := C.mongoc_client_new(curistr)
 	if raw == nil {
+		uri = regexp.MustCompile(".*:[^@]*").ReplaceAllString(uri, "***")
 		err = fmt.Errorf("create client fail by uri(%v)", uri)
 	} else {
 		client = &Client{
@@ -967,7 +969,7 @@ type findAndModifyReply struct {
 }
 
 //FindAndModifyWithFlags will find and modify document on database.
-func (c *Collection) FindAndModifyWithFlags(query, orderby, update, fields interface{}, remove, upsert, retnew bool, v interface{}) (changed *Changed, err error) {
+func (c *Collection) FindAndModifyWithFlags(query, sort, update, fields interface{}, remove, upsert, retnew bool, v interface{}) (changed *Changed, err error) {
 	var client = c.Pool.Pop()
 	defer client.Close()
 	if query == nil {
@@ -990,8 +992,8 @@ func (c *Collection) FindAndModifyWithFlags(query, orderby, update, fields inter
 			Value: query,
 		},
 		{
-			Name:  "orderby",
-			Value: orderby,
+			Name:  "sort",
+			Value: sort,
 		},
 		{
 			Name:  "update",
