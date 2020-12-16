@@ -1538,6 +1538,7 @@ func (b *Bulk) Execute() (reply *BulkReply, err error) {
 				return
 			}
 			C.mongoc_bulk_operation_insert(rawBluk, rawDoc)
+			C.bson_destroy(&rawDoc)
 		case "remove":
 			rawSelector, terr := parseBSON(cmd.Values[0])
 			if terr != nil {
@@ -1545,6 +1546,7 @@ func (b *Bulk) Execute() (reply *BulkReply, err error) {
 				return
 			}
 			C.mongoc_bulk_operation_remove(rawBluk, rawSelector)
+			C.bson_destroy(&rawSelector)
 		case "removeOne":
 			rawSelector, terr := parseBSON(cmd.Values[0])
 			if terr != nil {
@@ -1552,6 +1554,7 @@ func (b *Bulk) Execute() (reply *BulkReply, err error) {
 				return
 			}
 			C.mongoc_bulk_operation_remove_one(rawBluk, rawSelector)
+			C.bson_destroy(&rawSelector)
 		case "replace":
 			rawSelector, terr := parseBSON(cmd.Values[0])
 			if terr != nil {
@@ -1565,6 +1568,8 @@ func (b *Bulk) Execute() (reply *BulkReply, err error) {
 			}
 			upsert := (cmd.Values[2]).(bool)
 			C.mongoc_bulk_operation_replace_one(rawBluk, rawSelector, rawDoc, C.bool(upsert))
+			C.bson_destroy(&rawSelector)
+			C.bson_destroy(&rawDoc)
 		case "update":
 			rawSelector, terr := parseBSON(cmd.Values[0])
 			if terr != nil {
@@ -1578,6 +1583,8 @@ func (b *Bulk) Execute() (reply *BulkReply, err error) {
 			}
 			upsert := (cmd.Values[2]).(bool)
 			C.mongoc_bulk_operation_update(rawBluk, rawSelector, rawDoc, C.bool(upsert))
+			C.bson_destroy(&rawSelector)
+			C.bson_destroy(&rawDoc)
 		case "updateOne":
 			rawSelector, terr := parseBSON(cmd.Values[0])
 			if terr != nil {
@@ -1591,6 +1598,8 @@ func (b *Bulk) Execute() (reply *BulkReply, err error) {
 			}
 			upsert := (cmd.Values[2]).(bool)
 			C.mongoc_bulk_operation_update_one(rawBluk, rawSelector, rawDoc, C.bool(upsert))
+			C.bson_destroy(&rawSelector)
+			C.bson_destroy(&rawDoc)
 		}
 	}
 	var breply C.bson_t
